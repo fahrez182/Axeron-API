@@ -21,3 +21,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "Axeron-API"
 include(":api")
+include(":data")

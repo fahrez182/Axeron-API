@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "frb.axeron.api"
+    namespace = "frb.axeron.data"
     compileSdk {
         version = release(36)
     }
@@ -14,7 +14,7 @@ android {
     defaultConfig {
         minSdk = 26
 
-        testInstrumentationRunner = "android.support.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles("consumer-rules.pro")
     }
 
@@ -40,10 +40,6 @@ kotlin {
 }
 
 dependencies {
-    implementation(libs.appcompat.v7)
-    implementation(libs.androidx.core.ktx)
 }
 
 extra["publishLibrary"] = true
-
-
