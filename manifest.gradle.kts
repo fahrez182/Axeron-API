@@ -1,6 +1,6 @@
 val apiVersionMajor = 1
 val apiVersionMinor = 3
-val apiVersionPatch = 100
+val apiVersionPatch = 101
 
 extra["api_version_major"] = apiVersionMajor
 extra["api_version_minor"] = apiVersionMinor
