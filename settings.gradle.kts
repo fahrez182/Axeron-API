@@ -25,4 +25,5 @@ include(":api")
 include(":aidl")
 include(":shared")
 include(":provider")
+include(":server-shared")
  

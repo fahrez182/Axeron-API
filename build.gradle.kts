@@ -12,7 +12,7 @@ allprojects {
     }
 }
 
-apply(from = "${rootDir}/manifest.gradle.kts")
+apply(from = "manifest.gradle.kts")
 
 subprojects {
     plugins.withId("com.android.library") {
@@ -52,7 +52,7 @@ subprojects {
                 "${groupIdBase}.${project.parent?.name}"
             }
 
-            version = findProperty("api_version") as String
+            version = findProperty("api_version_code") as String
 
             println("${project.displayName}: ${group}:${project.name}:${version}")
 

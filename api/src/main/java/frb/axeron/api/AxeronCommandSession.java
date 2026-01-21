@@ -185,7 +185,7 @@ public class AxeronCommandSession {
                 exitCode.set(code);
 
                 Log.d("CommandSession", "Process selesai, exitCode = " + exitCode);
-            } catch (InterruptedException e) {
+            } catch (InterruptedException | NullPointerException e) {
                 errorListener("waitFor: " + e.getMessage());
             } finally {
                 destroy();

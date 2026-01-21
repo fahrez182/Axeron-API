@@ -9,6 +9,7 @@ espressoCore = "3.7.0"
 appcompat = "1.7.1"
 material = "1.13.0"
 runner = "1.0.2"
+lifecycleLivedataKtx = "2.10.0"
 espressoCoreVersion = "3.0.2"
 appcompatV7 = "28.0.0"
 gson = "2.13.2"
@@ -27,6 +28,7 @@ androidx-annotation-jvm = { group = "androidx.annotation", name = "annotation-jv
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
 androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }
 androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
+androidx-lifecycle-livedata-ktx = { module = "androidx.lifecycle:lifecycle-livedata-ktx", version.ref = "lifecycleLivedataKtx" }
 
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 material = { group = "com.google.android.material", name = "material", version.ref = "material" }
@@ -50,5 +52,6 @@ topjohnwu-libsu-io = { group = "com.github.topjohnwu.libsu", name = "io", versio
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version = "2.2.0" }
+rikka-tools-refine = { id = "dev.rikka.tools.refine", version.ref = "refine" }
 android-library = { id = "com.android.library", version.ref = "agp" }
 

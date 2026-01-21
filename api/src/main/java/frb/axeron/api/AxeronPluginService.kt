@@ -11,10 +11,10 @@ import androidx.annotation.RequiresApi
 import com.google.gson.annotations.SerializedName
 import frb.axeron.api.core.AxeronSettings
 import frb.axeron.api.core.Engine.Companion.application
-import frb.axeron.shared.AxeronConstant
-import frb.axeron.shared.Environment
+import frb.axeron.server.Environment
+import frb.axeron.server.PluginInstaller
+import frb.axeron.shared.AxeronApiConstant
 import frb.axeron.shared.PathHelper
-import frb.axeron.shared.PluginInstaller
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -39,11 +39,11 @@ object AxeronPluginService {
         get() = application.applicationInfo.sourceDir
 
     val AXERONBIN: String
-        get() = PathHelper.getShellPath(AxeronConstant.folder.PARENT_BINARY).absolutePath
+        get() = PathHelper.getShellPath(AxeronApiConstant.folder.PARENT_BINARY).absolutePath
     val PLUGINDIR: String
-        get() = PathHelper.getShellPath(AxeronConstant.folder.PARENT_PLUGIN).absolutePath
+        get() = PathHelper.getShellPath(AxeronApiConstant.folder.PARENT_PLUGIN).absolutePath
     val PLUGINUPDATEDIR: String
-        get() = PathHelper.getShellPath(AxeronConstant.folder.PARENT_PLUGIN_UPDATE).absolutePath
+        get() = PathHelper.getShellPath(AxeronApiConstant.folder.PARENT_PLUGIN_UPDATE).absolutePath
 
     val axFS
         get() = Axeron.newFileService()!!
@@ -150,7 +150,8 @@ object AxeronPluginService {
     ): FlashResult {
         val resolver = application.contentResolver
         with(resolver.openInputStream(installer.uri)) {
-            val file = File(PathHelper.getTmpPath(AxeronConstant.folder.PARENT_ZIP), "module.zip")
+            val file =
+                File(PathHelper.getTmpPath(AxeronApiConstant.folder.PARENT_ZIP), "module.zip")
 
             val fos = axFS.getStreamSession(file.absolutePath, true, false).outputStream
 
@@ -470,7 +471,7 @@ object AxeronPluginService {
     suspend fun igniteSuspendService(): Boolean = withContext(Dispatchers.IO) {
 
         val localVer = Axeron.getAxeronInfo().getActualVersion()
-        val serverVer = AxeronConstant.server.getActualVersion()
+        val serverVer = AxeronApiConstant.server.getActualVersion()
 
         if (serverVer > localVer) {
             Log.i(TAG, "Updating.. $localVer < $serverVer")
@@ -549,7 +550,7 @@ object AxeronPluginService {
     }
 
     private suspend fun ensureScripts(): Boolean = withContext(Dispatchers.IO) {
-        val files = application.assets.list("scripts") ?: return@withContext  false
+        val files = application.assets.list("scripts") ?: return@withContext false
         if (files.isEmpty()) return@withContext false
 
         if (!axFS.exists(AXERONBIN) && !axFS.mkdirs(AXERONBIN)) return@withContext false

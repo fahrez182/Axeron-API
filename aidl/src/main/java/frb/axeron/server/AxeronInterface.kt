@@ -1,6 +1,4 @@
-package frb.axeron.aidl
-
-import frb.axeron.shared.ServerInfo
+package frb.axeron.server
 
 interface AxeronInterface {
     fun enableShizukuService(enable: Boolean)

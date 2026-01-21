@@ -2,7 +2,7 @@
 package frb.axeron.server;
 
 import frb.axeron.server.IOutputStreamCallback;
-import frb.axeron.shared.FileStat;
+parcelable FileStat;
 // Declare any non-default types here with import statements
 
 interface IFileService {

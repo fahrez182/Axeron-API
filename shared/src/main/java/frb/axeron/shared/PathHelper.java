@@ -16,12 +16,12 @@ public class PathHelper {
     }
 
     public static File getShellPath(String folderName) {
-        if (folderName == null) return new File(AxeronConstant.folder.SHELL_DE);
-        return new File(AxeronConstant.folder.SHELL_DE, folderName);
+        if (folderName == null) return new File(AxeronApiConstant.folder.SHELL_DE);
+        return new File(AxeronApiConstant.folder.SHELL_DE, folderName);
     }
 
     public static File getTmpPath(String folderName) {
-        return new File(AxeronConstant.folder.TMP, folderName);
+        return new File(AxeronApiConstant.folder.TMP, folderName);
     }
 
     public static String getRelativePath(String rootPath, String fullPath) {

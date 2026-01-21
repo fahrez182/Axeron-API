@@ -1,6 +1,6 @@
 package frb.axeron.shared;
 
-public class AxeronConstant {
+public class AxeronApiConstant {
     public static class server {
         public static final String VERSION_NAME = BuildConfig.SERVER_VERSION_NAME;
         public static final long VERSION_CODE = BuildConfig.SERVER_VERSION_CODE;

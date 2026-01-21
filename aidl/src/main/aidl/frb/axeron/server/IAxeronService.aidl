@@ -6,9 +6,9 @@ import frb.axeron.server.IRuntimeService;
 import frb.axeron.server.IAxeronApplication;
 import moe.shizuku.server.IShizukuService;
 import rikka.parcelablelist.ParcelableListSlice;
-import frb.axeron.shared.ServerInfo;
-import frb.axeron.shared.PluginInfo;
-import frb.axeron.shared.Environment;
+parcelable ServerInfo;
+parcelable PluginInfo;
+parcelable Environment;
 
 interface IAxeronService {
     IFileService getFileService() = 2;

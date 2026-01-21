@@ -1,8 +1,8 @@
 package frb.axeron.api
 
 import android.os.Parcelable
-import frb.axeron.shared.AxeronConstant
-import frb.axeron.shared.ServerInfo
+import frb.axeron.server.ServerInfo
+import frb.axeron.shared.AxeronApiConstant
 import kotlinx.parcelize.Parcelize
 
 @Parcelize
@@ -15,11 +15,11 @@ data class AxeronInfo(
     }
 
     fun isRunning(): Boolean {
-        return Axeron.pingBinder() && AxeronConstant.server.getActualVersion() <= getActualVersion()
+        return Axeron.pingBinder() && AxeronApiConstant.server.getActualVersion() <= getActualVersion()
     }
 
     fun isNeedUpdate(): Boolean {
-        return AxeronConstant.server.getActualVersion() > getActualVersion() && Axeron.pingBinder()
+        return AxeronApiConstant.server.getActualVersion() > getActualVersion() && Axeron.pingBinder()
     }
 
     fun isNeedExtraStep(): Boolean {

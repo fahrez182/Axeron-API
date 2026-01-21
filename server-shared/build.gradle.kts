@@ -3,40 +3,21 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.rikka.tools.refine)
+    id("kotlin-parcelize")
 }
 
-apply(from = "../manifest.gradle.kts")
-
 android {
-    namespace = "frb.axeron.shared"
+    namespace = "frb.axeron.server"
     compileSdk {
         version = release(36)
     }
 
     defaultConfig {
-        minSdk = 27
+        minSdk = 26
 
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles("consumer-rules.pro")
-
-        buildConfigField(
-            "String",
-            "SERVER_VERSION_NAME",
-            "\"${findProperty("api_version_name")}\""
-        )
-        buildConfigField(
-            "int",
-            "SERVER_VERSION_CODE",
-            "${findProperty("api_version_code")}"
-        )
-        buildConfigField(
-            "int",
-            "SERVER_PATCH_CODE",
-            "${findProperty("api_version_code")}"
-        )
-    }
-
-    buildFeatures {
-        buildConfig = true
     }
 
     buildTypes {
@@ -61,7 +42,19 @@ kotlin {
 }
 
 dependencies {
-    implementation(libs.androidx.annotation.jvm)
+    implementation(libs.androidx.annotation)
+    implementation(libs.androidx.lifecycle.livedata.ktx)
+
+    implementation(libs.rikka.parcelablelist)
+    annotationProcessor(libs.rikka.refine.annotation.processor)
+    implementation(libs.rikka.refine.runtime)
+    implementation(libs.rikka.refine.annotation)
+    implementation(libs.rikka.hidden.compat)
+    compileOnly(libs.rikka.hidden.stub)
+
+    implementation(project(":api"))
+    implementation(project(":aidl"))
+    implementation(project(":shared"))
 }
 
 extra["publishLibrary"] = true

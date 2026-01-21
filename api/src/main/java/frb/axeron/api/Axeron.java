@@ -1,7 +1,7 @@
 package frb.axeron.api;
 
 
-import static frb.axeron.shared.AxeronConstant.server.TYPE_ENV;
+import static frb.axeron.shared.AxeronApiConstant.server.TYPE_ENV;
 
 import android.content.pm.PackageInfo;
 import android.os.Bundle;
@@ -21,11 +21,11 @@ import java.util.Objects;
 
 import frb.axeron.api.core.AxeronSettings;
 import frb.axeron.api.core.Engine;
-import frb.axeron.shared.AxeronConstant;
-import frb.axeron.shared.Environment;
-import frb.axeron.shared.PluginInfo;
+import frb.axeron.server.Environment;
 import frb.axeron.server.IAxeronApplication;
 import frb.axeron.server.IAxeronService;
+import frb.axeron.server.PluginInfo;
+import frb.axeron.shared.AxeronApiConstant;
 import moe.shizuku.server.IShizukuService;
 import rikka.shizuku.Shizuku;
 
@@ -340,7 +340,7 @@ public class Axeron {
     }
 
     public static boolean isUpdated() {
-        return AxeronConstant.server.getActualVersion() <= Axeron.getAxeronInfo().getActualVersion();
+        return AxeronApiConstant.server.getActualVersion() <= Axeron.getAxeronInfo().getActualVersion();
     }
 
     public interface OnBinderReceivedListener {
