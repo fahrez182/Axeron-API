@@ -6,8 +6,10 @@ plugins {
     id("kotlin-parcelize")
 }
 
+apply(from = file("../manifest.gradle.kts"))
+
 android {
-    namespace = "frb.axeron.api"
+    namespace = "frb.axeron.shared"
     compileSdk {
         version = release(36)
     }
@@ -16,6 +18,26 @@ android {
         minSdk = 27
 
         consumerProguardFiles("consumer-rules.pro")
+
+        buildConfigField(
+            "String",
+            "SERVER_VERSION_NAME",
+            "\"${findProperty("api_version_name")}\""
+        )
+        buildConfigField(
+            "int",
+            "SERVER_VERSION_CODE",
+            "${findProperty("api_version")}"
+        )
+        buildConfigField(
+            "int",
+            "SERVER_PATCH_CODE",
+            "${findProperty("api_version")}"
+        )
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     buildTypes {
@@ -40,15 +62,8 @@ kotlin {
 }
 
 dependencies {
-    implementation(project(":aidl"))
-    implementation(project(":shared"))
-
-    implementation(libs.androidx.annotation.jvm)
-    implementation(libs.androidx.core.ktx)
     implementation(libs.gson)
-    implementation(libs.rikka.parcelablelist)
-    implementation(libs.rikka.hidden.compat)
-    compileOnly(libs.rikka.hidden.stub)
-
-    implementation(libs.topjohnwu.libsu.core)
+    implementation(libs.androidx.annotation.jvm)
 }
+
+extra["publishLibrary"] = true
