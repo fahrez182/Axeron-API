@@ -52,7 +52,7 @@ subprojects {
                 "${groupIdBase}.${project.parent?.name}"
             }
 
-            version = findProperty("api_version_name") as String
+            version = findProperty("api_version") as String
 
             println("${project.displayName}: ${group}:${project.name}:${version}")
 

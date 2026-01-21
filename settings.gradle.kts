@@ -16,9 +16,13 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        maven { url = uri("https://jitpack.io") }
     }
 }
 
 rootProject.name = "Axeron-API"
 include(":api")
-include(":data")
+include(":aidl")
+include(":shared")
+include(":provider")
+ 

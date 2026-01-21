@@ -1,4 +1,4 @@
-package frb.axeron.data
+package frb.axeron.shared
 
 class DataMain {
     fun getFromDataMain(): String {

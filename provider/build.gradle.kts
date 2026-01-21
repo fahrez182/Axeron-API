@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "frb.axeron.data"
+    namespace = "frb.axeron.provider"
     compileSdk {
         version = release(36)
     }
@@ -35,11 +35,14 @@ android {
 
 kotlin {
     compilerOptions {
-        jvmTarget.set(JvmTarget.JVM_11)
+        jvmTarget.set(JvmTarget.JVM_21)
     }
 }
 
 dependencies {
+    implementation(project(":api"))
+    implementation(project(":aidl"))
+    implementation(libs.androidx.annotation)
 }
 
 extra["publishLibrary"] = true
