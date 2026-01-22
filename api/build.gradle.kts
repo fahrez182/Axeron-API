@@ -48,3 +48,5 @@ dependencies {
 
     implementation(libs.topjohnwu.libsu.core)
 }
+
+extra["publishLibrary"] = true

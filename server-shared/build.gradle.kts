@@ -51,5 +51,3 @@ dependencies {
     implementation(project(":aidl"))
     implementation(project(":shared"))
 }
-
-extra["publishLibrary"] = true
