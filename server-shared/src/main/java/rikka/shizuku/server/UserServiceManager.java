@@ -254,7 +254,7 @@ public abstract class UserServiceManager {
         String cmd = getUserServiceStartCmd(record, key, token, packageName, classname, processNameSuffix, callingUid, use32Bits && AbiUtil.has32Bit(), debug);
         int exitCode;
         try {
-            Process process = Runtime.getRuntime().exec(new String[]{"sh"}, getEnvironment(), null);
+            Process process = Runtime.getRuntime().exec(getUserServiceCmd(), getEnvironment(), null);
             OutputStream os = process.getOutputStream();
             os.write(cmd.getBytes());
             os.flush();
@@ -271,11 +271,13 @@ public abstract class UserServiceManager {
         }
     }
 
+    public abstract String[] getUserServiceCmd();
+
     public abstract String getUserServiceStartCmd(
             UserServiceRecord record, String key, String token, String packageName,
             String classname, String processNameSuffix, int callingUid, boolean use32Bits, boolean debug);
 
-    private void sendUserServiceLocked(IBinder binder, String token, int pid) {
+    private void sendUserServiceLocked(IBinder binder, String token, int pgid) {
         Map.Entry<String, UserServiceRecord> entry = null;
         for (Map.Entry<String, UserServiceRecord> e : userServiceRecords.entrySet()) {
             if (e.getValue().token.equals(token)) {
@@ -292,17 +294,17 @@ public abstract class UserServiceManager {
 
         UserServiceRecord record = entry.getValue();
         record.setBinder(binder);
-        record.setPid(pid);
+        record.setPgid(pgid);
     }
 
     public void attachUserService(IBinder binder, Bundle options) {
         Objects.requireNonNull(binder, "binder is null");
         String token = Objects.requireNonNull(options.getString(ShizukuApiConstants.USER_SERVICE_ARG_TOKEN), "token is null");
-        int pid = options.getInt(ShizukuApiConstants.USER_SERVICE_ARG_PID, -1);
+        int pgid = options.getInt(ShizukuApiConstants.USER_SERVICE_ARG_PGID, -1);
 
 
         synchronized (this) {
-            sendUserServiceLocked(binder, token, pid);
+            sendUserServiceLocked(binder, token, pgid);
         }
     }
 

@@ -1,9 +1,5 @@
 package rikka.shizuku;
 
-import static androidx.annotation.RestrictTo.Scope.LIBRARY_GROUP_PREFIX;
-
-import androidx.annotation.RestrictTo;
-
 public class ShizukuApiConstants {
 
     public static final int SERVER_VERSION = 13;
@@ -29,7 +25,7 @@ public class ShizukuApiConstants {
 
 //    @RestrictTo(LIBRARY_GROUP_PREFIX)
     public static final String USER_SERVICE_ARG_TOKEN = "shizuku:user-service-arg-token";
-    public static final String USER_SERVICE_ARG_PID = "shizuku:user-service-arg-pid";
+    public static final String USER_SERVICE_ARG_PGID = "shizuku:user-service-arg-pgid";
 
     // bind application
     public static final String BIND_APPLICATION_SERVER_VERSION = "shizuku:attach-reply-version";

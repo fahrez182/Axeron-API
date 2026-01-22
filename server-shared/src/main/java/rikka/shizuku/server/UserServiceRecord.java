@@ -8,6 +8,7 @@ import android.os.Parcel;
 import android.os.RemoteCallbackList;
 
 import java.io.IOException;
+import java.util.Locale;
 import java.util.UUID;
 
 import moe.shizuku.server.IShizukuServiceConnection;
@@ -22,7 +23,7 @@ public abstract class UserServiceRecord {
     public final RemoteCallbackList<IShizukuServiceConnection> callbacks = new ConnectionList();
     private final IBinder.DeathRecipient deathRecipient;
     public String token;
-    public int pid;
+    public int pgid;
     public IBinder service;
     public boolean daemon;
     public boolean starting;
@@ -61,8 +62,8 @@ public abstract class UserServiceRecord {
         this.daemon = daemon;
     }
 
-    public void setPid(int pid) {
-        this.pid = pid;
+    public void setPgid(int pgid) {
+        this.pgid = pgid;
     }
 
     public void setBinder(IBinder binder) {
@@ -133,12 +134,14 @@ public abstract class UserServiceRecord {
 
         callbacks.kill();
         try {
-            int result = Runtime.getRuntime().exec("kill " + pid).waitFor();
+            int result = Runtime.getRuntime().exec(String.format(Locale.getDefault(),"kill -TERM -%d", pgid)).waitFor();
             if (result != 0) {
-                LOGGER.w("Failed to kill service pid record %s", pid);
+                LOGGER.w("Failed to kill service pgid record %d", pgid);
+            } else {
+                LOGGER.i("Killed service pgid record %d", pgid);
             }
         } catch (IOException | InterruptedException e) {
-            LOGGER.w("Failed to kill service pid record %s", pid);
+            LOGGER.w("Failed to kill service pgid record %d", pgid);
         }
     }
 

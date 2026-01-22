@@ -32,6 +32,7 @@ public class UserService {
         String pkg = null;
         String cls = null;
         int uid = -1;
+        int pgid = -1;
         int pid = Os.getpid();
 
         for (String arg : args) {
@@ -45,12 +46,15 @@ public class UserService {
                 cls = arg.substring(8);
             } else if (arg.startsWith("--uid=")) {
                 uid = Integer.parseInt(arg.substring(6));
+            } else if (arg.startsWith("--pgid=")) {
+                pgid = Integer.parseInt(arg.substring(7));
             }
         }
 
         int userId = uid / 100000;
 
         Log.i(TAG, String.format("starting service %s/%s...", pkg, cls));
+        Log.i(TAG, String.format("PGID/PID: %d/%d", pgid, pid));
 
         IBinder service;
 
@@ -89,6 +93,6 @@ public class UserService {
             return null;
         }
 
-        return new Triple<>(service, token, pid);
+        return new Triple<>(service, token, pgid);
     }
 }
