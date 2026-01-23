@@ -1,7 +1,5 @@
--keepclassmembers class * implements android.os.Parcelable {
-    public static final ** CREATOR;
+-keep class * implements android.os.Parcelable {
+    public static final android.os.Parcelable$Creator *;
 }
 
--keepclasseswithmembernames,includedescriptorclasses class * {
-    native <methods>;
-}
+-keepnames class * implements android.os.Parcelable
