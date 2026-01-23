@@ -343,7 +343,7 @@ public abstract class Service<
             attachApplication(IShizukuApplication.Stub.asInterface(binder), args);
             reply.writeNoException();
             return true;
-        } else if (rishService.onTransact(code, data, reply, flags)) {
+        } else if (rishService.onTransact(code, data, reply, flags, userServiceManager.getEnvironment())) {
             return true;
         }
         return super.onTransact(code, data, reply, flags);
