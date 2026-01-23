@@ -20,6 +20,7 @@ refine = "4.4.0"
 compatibility = "2.0.0"
 
 libsu = "6.0.0"
+libcxx = "29.0.14206865"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -36,6 +37,7 @@ runner = { group = "com.android.support.test", name = "runner", version.ref = "r
 espresso-core = { group = "com.android.support.test.espresso", name = "espresso-core", version.ref = "espressoCoreVersion" }
 appcompat-v7 = { group = "com.android.support", name = "appcompat-v7", version.ref = "appcompatV7" }
 gson = { module = "com.google.code.gson:gson", version.ref = "gson" }
+libcxx = { module = "org.lsposed.libcxx:libcxx", version.ref = "libcxx" }
 
 rikka-compatibility = { module = "dev.rikka.rikkax.compatibility:compatibility", version.ref = "compatibility" }
 rikka-parcelablelist = { module = "dev.rikka.rikkax.parcelablelist:parcelablelist", version.ref = "parcelablelist" }

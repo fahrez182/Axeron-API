@@ -26,4 +26,5 @@ include(":aidl")
 include(":shared")
 include(":provider")
 include(":server-shared")
+include(":rish")
  

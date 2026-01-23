@@ -1,6 +1,8 @@
 package rikka.shizuku;
 
 import static androidx.annotation.RestrictTo.Scope.LIBRARY_GROUP_PREFIX;
+import static rikka.shizuku.ShizukuApiConstants.ATTACH_APPLICATION_API_VERSION;
+import static rikka.shizuku.ShizukuApiConstants.ATTACH_APPLICATION_PACKAGE_NAME;
 import static rikka.shizuku.ShizukuApiConstants.BIND_APPLICATION_PERMISSION_GRANTED;
 import static rikka.shizuku.ShizukuApiConstants.BIND_APPLICATION_SERVER_PATCH_VERSION;
 import static rikka.shizuku.ShizukuApiConstants.BIND_APPLICATION_SERVER_SECONTEXT;
@@ -48,7 +50,7 @@ public class Shizuku {
         binderReady = false;
         onBinderReceived(null, null);
     };
-    private static final boolean preV11 = false;
+    private static boolean preV11 = false;
     private static boolean binderReady = false;
     private static final IShizukuApplication SHIZUKU_APPLICATION = new IShizukuApplication.Stub() {
 
@@ -76,48 +78,48 @@ public class Shizuku {
         }
     };
 
-//    private static boolean attachApplicationV13(IBinder binder, String packageName) throws RemoteException {
-//        boolean result;
-//
-//        Bundle args = new Bundle();
-//        args.putInt(ATTACH_APPLICATION_API_VERSION, ShizukuApiConstants.SERVER_VERSION);
-//        args.putString(ATTACH_APPLICATION_PACKAGE_NAME, packageName);
-//
-//        Parcel data = Parcel.obtain();
-//        Parcel reply = Parcel.obtain();
-//        try {
-//            data.writeInterfaceToken(ShizukuApiConstants.BINDER_DESCRIPTOR);
-//            data.writeStrongBinder(SHIZUKU_APPLICATION.asBinder());
-//            data.writeInt(1);
-//            args.writeToParcel(data, 0);
-//            result = binder.transact(18 /*IShizukuService.Stub.TRANSACTION_attachApplication*/, data, reply, 0);
-//            reply.readException();
-//        } finally {
-//            reply.recycle();
-//            data.recycle();
-//        }
-//
-//        return result;
-//    }
-//
-//    private static boolean attachApplicationV11(IBinder binder, String packageName) throws RemoteException {
-//        boolean result;
-//
-//        Parcel data = Parcel.obtain();
-//        Parcel reply = Parcel.obtain();
-//        try {
-//            data.writeInterfaceToken(ShizukuApiConstants.BINDER_DESCRIPTOR);
-//            data.writeStrongBinder(SHIZUKU_APPLICATION.asBinder());
-//            data.writeString(packageName);
-//            result = binder.transact(14 /*IShizukuService.Stub.TRANSACTION_attachApplication*/, data, reply, 0);
-//            reply.readException();
-//        } finally {
-//            reply.recycle();
-//            data.recycle();
-//        }
-//
-//        return result;
-//    }
+    private static boolean attachApplicationV13(IBinder binder, String packageName) throws RemoteException {
+        boolean result;
+
+        Bundle args = new Bundle();
+        args.putInt(ATTACH_APPLICATION_API_VERSION, ShizukuApiConstants.SERVER_VERSION);
+        args.putString(ATTACH_APPLICATION_PACKAGE_NAME, packageName);
+
+        Parcel data = Parcel.obtain();
+        Parcel reply = Parcel.obtain();
+        try {
+            data.writeInterfaceToken(ShizukuApiConstants.BINDER_DESCRIPTOR);
+            data.writeStrongBinder(SHIZUKU_APPLICATION.asBinder());
+            data.writeInt(1);
+            args.writeToParcel(data, 0);
+            result = binder.transact(18 /*IShizukuService.Stub.TRANSACTION_attachApplication*/, data, reply, 0);
+            reply.readException();
+        } finally {
+            reply.recycle();
+            data.recycle();
+        }
+
+        return result;
+    }
+
+    private static boolean attachApplicationV11(IBinder binder, String packageName) throws RemoteException {
+        boolean result;
+
+        Parcel data = Parcel.obtain();
+        Parcel reply = Parcel.obtain();
+        try {
+            data.writeInterfaceToken(ShizukuApiConstants.BINDER_DESCRIPTOR);
+            data.writeStrongBinder(SHIZUKU_APPLICATION.asBinder());
+            data.writeString(packageName);
+            result = binder.transact(14 /*IShizukuService.Stub.TRANSACTION_attachApplication*/, data, reply, 0);
+            reply.readException();
+        } finally {
+            reply.recycle();
+            data.recycle();
+        }
+
+        return result;
+    }
 
     @RestrictTo(LIBRARY_GROUP_PREFIX)
     public static void onBinderReceived(@Nullable IBinder newBinder, String packageName) {
@@ -144,22 +146,19 @@ public class Shizuku {
                 Log.i("ShizukuApplication", "attachApplication");
             }
 
-//            try {
-//                if (!attachApplicationV13(binder, packageName) && !attachApplicationV11(binder, packageName)) {
-//                    preV11 = true;
-//                }
-//                Log.i("ShizukuApplication", "attachApplication");
-//            } catch (Throwable e) {
-//                Log.w("ShizukuApplication", Log.getStackTraceString(e));
-//            }
+            try {
+                if (!attachApplicationV13(binder, packageName) && !attachApplicationV11(binder, packageName)) {
+                    preV11 = true;
+                }
+                Log.i("ShizukuApplication", "attachApplication");
+            } catch (Throwable e) {
+                Log.w("ShizukuApplication", Log.getStackTraceString(e));
+            }
 
-//            if (preV11) {
-//                binderReady = true;
-//                scheduleBinderReceivedListeners();
-//            }
-
-            binderReady = true;
-            scheduleBinderReceivedListeners();
+            if (preV11) {
+                binderReady = true;
+                scheduleBinderReceivedListeners();
+            }
         }
     }
 

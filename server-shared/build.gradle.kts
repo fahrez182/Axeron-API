@@ -50,4 +50,5 @@ dependencies {
     implementation(project(":api"))
     implementation(project(":aidl"))
     implementation(project(":shared"))
+    implementation(project(":rish"))
 }

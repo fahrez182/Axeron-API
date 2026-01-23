@@ -23,6 +23,8 @@ import moe.shizuku.server.IShizukuApplication;
 import moe.shizuku.server.IShizukuService;
 import moe.shizuku.server.IShizukuServiceConnection;
 import rikka.hidden.compat.PermissionManagerApis;
+import rikka.rish.RishConfig;
+import rikka.rish.RishService;
 import rikka.shizuku.ShizukuApiConstants;
 import rikka.shizuku.server.api.RemoteProcessHolder;
 import rikka.shizuku.server.util.Logger;
@@ -34,17 +36,26 @@ public abstract class Service<
         ClientMgr extends ClientManager<ConfigMgr>,
         ConfigMgr extends ConfigManager> extends IShizukuService.Stub {
 
-    protected static final Logger LOGGER = new Logger("ShizukuService");
+    public static final Logger LOGGER = new Logger("ShizukuService");
     private final UserServiceMgr userServiceManager;
     private final ConfigMgr configManager;
     private final ClientMgr clientManager;
+    private final RishService rishService;
 
     public AxeronInterface axeronInterface;
 
     public Service(UserServiceMgr shizukuUserServiceManager) {
+        RishConfig.init(ShizukuApiConstants.BINDER_DESCRIPTOR, 30000);
         userServiceManager = shizukuUserServiceManager;
         configManager = onCreateConfigManager();
         clientManager = onCreateClientManager();
+        rishService = new RishService() {
+
+            @Override
+            public void enforceCallingPermission(String func) {
+                Service.this.enforceCallingPermission(func);
+            }
+        };
     }
 
     public abstract ClientMgr onCreateClientManager();
@@ -156,9 +167,9 @@ public abstract class Service<
     }
 
     @Override
-    public final int getVersion() throws RemoteException {
+    public final int getVersion() {
         enforceCallingPermission("getVersion");
-        return (int) axeronInterface.getServerInfo().getVersionCode();
+        return ShizukuApiConstants.SERVER_VERSION;
     }
 
     @Override
@@ -331,6 +342,8 @@ public abstract class Service<
             args.putInt(ShizukuApiConstants.ATTACH_APPLICATION_API_VERSION, -1);
             attachApplication(IShizukuApplication.Stub.asInterface(binder), args);
             reply.writeNoException();
+            return true;
+        } else if (rishService.onTransact(code, data, reply, flags)) {
             return true;
         }
         return super.onTransact(code, data, reply, flags);
