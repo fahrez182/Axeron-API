@@ -90,5 +90,74 @@ object Axerish {
             Log.e(TAG, "Failed to Init Axerish", e)
         }
     }
+
+    fun initialize(packageName: String) {
+        Log.i(TAG, "Initializing Axerish (shell+checksum) for $packageName")
+
+        val baseDir = "${'/'}data/data/${packageName}/files/bin"
+        axerish_path = File(baseDir, "axerish")
+        dex_path = File(baseDir, "shell_axerish.dex")
+
+        val cmd = $$"""
+            set -e
+    
+            APK=$(pm path $$packageName | sed 's/package://')
+            if [ -z "$APK" ]; then
+                echo "base.apk not found"
+                exit 1
+            fi
+    
+            mkdir -p $$baseDir
+    
+            check_and_extract() {
+                ASSET_NAME=$1
+                OUT_FILE=$2
+                MODE=$3
+    
+                TMP_HASH=$(unzip -p "$APK" "assets/$ASSET_NAME" | sha256sum | cut -d' ' -f1)
+    
+                if [ -f "$OUT_FILE" ]; then
+                    CUR_HASH=$(sha256sum "$OUT_FILE" | cut -d' ' -f1)
+                else
+                    CUR_HASH=""
+                fi
+    
+                if [ "$TMP_HASH" = "$CUR_HASH" ]; then
+                    echo "$ASSET_NAME unchanged, skip"
+                    return
+                fi
+    
+                echo "Updating $ASSET_NAME"
+                unzip -o "$APK" "assets/$ASSET_NAME" -d $$baseDir
+                mv "$$baseDir/assets/$ASSET_NAME" "$OUT_FILE"
+                chmod $MODE "$OUT_FILE"
+            }
+    
+            check_and_extract axerish $${axerish_path.absolutePath} 755
+            check_and_extract shell_axerish.dex $${dex_path.absolutePath} 400
+    
+            rmdir $$baseDir/assets 2>/dev/null || true
+            echo "Axerish init done"
+        """.trimIndent()
+
+        try {
+            val p = Runtime.getRuntime().exec(
+                arrayOf("/system/bin/sh", "-c", cmd)
+            )
+
+            p.inputStream.bufferedReader().useLines {
+                it.forEach { line -> Log.i(TAG, line) }
+            }
+            p.errorStream.bufferedReader().useLines {
+                it.forEach { line -> Log.e(TAG, line) }
+            }
+
+            val code = p.waitFor()
+            Log.i(TAG, "Axerish init exit code=$code")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to init Axerish (shell)", e)
+        }
+    }
+
 }
 
