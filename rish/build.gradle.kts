@@ -36,8 +36,8 @@ android {
         prefab = true
     }
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
     }
     buildToolsVersion = "36.0.0"
     ndkVersion = "29.0.14206865"
@@ -50,6 +50,9 @@ kotlin {
 }
 
 dependencies {
+    implementation(project(":aidl"))
+    implementation(project(":api"))
+    implementation(project(":shared"))
     implementation(libs.androidx.annotation)
     implementation(libs.libcxx)
 }

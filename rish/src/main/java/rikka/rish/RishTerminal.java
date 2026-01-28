@@ -8,9 +8,16 @@ import android.util.Log;
 
 import java.io.File;
 import java.io.FileDescriptor;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import rikka.shizuku.Shizuku;
+import rikka.shizuku.ShizukuRemoteProcess;
 
 public class RishTerminal {
 
@@ -21,11 +28,91 @@ public class RishTerminal {
     private FileDescriptor[] stdout;
     private FileDescriptor[] stderr;
     private int ttyFd = -1;
-    private int exitCode;
-    public RishTerminal(String[] argv) throws ErrnoException, RemoteException {
-        this.argv = argv;
+
+    private static final int NOT_EXITED = Integer.MIN_VALUE;
+    private final AtomicInteger exitCode = new AtomicInteger(NOT_EXITED);
+
+    public RishTerminal(String[] argv) throws ErrnoException, RemoteException, IOException, InterruptedException {
         this.tty = prepare();
 
+        if (this.tty == 0) {
+            if (argv == null || argv.length == 0) {
+                this.argv = new String[]{"/system/bin/sh"};
+            } else {
+                String[] newArgv = new String[argv.length + 1];
+                newArgv[0] = "/system/bin/sh";
+                System.arraycopy(argv, 0, newArgv, 1, argv.length);
+                this.argv = newArgv;
+            }
+
+            ShizukuRemoteProcess process = Shizuku.newProcess(this.argv, null, null);
+
+            new Thread(() -> {
+                try (
+                        InputStream in = process.getInputStream();
+                        OutputStream out = System.out
+                ) {
+                    byte[] buf = new byte[4096];
+                    int n;
+                    while ((n = in.read(buf)) != -1) {
+                        out.write(buf, 0, n);
+                        out.flush();
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace(System.err);
+                }
+            }, "rish-stdout").start();
+
+            new Thread(() -> {
+                try (
+                        InputStream in = process.getErrorStream();
+                        OutputStream out = System.err
+                ) {
+                    byte[] buf = new byte[4096];
+                    int n;
+                    while ((n = in.read(buf)) != -1) {
+                        out.write(buf, 0, n);
+                        out.flush();
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace(System.err);
+                }
+            }, "rish-stderr").start();
+
+            new Thread(() -> {
+                try {
+                    int code = process.waitFor();
+                    exitCode.set(code);
+
+                    try {
+                        process.getOutputStream().close();
+                    } catch (Exception ignored) {
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace(System.err);
+                }
+            }, "rish-waiter").start();
+
+
+            InputStream in = System.in;
+            OutputStream out = process.getOutputStream();
+            byte[] buf = new byte[4096];
+
+            while (exitCode.get() == NOT_EXITED) {
+                if (in.available() > 0) {
+                    int n = in.read(buf);
+                    if (n == -1) break;
+
+                    out.write(buf, 0, n);
+                    out.flush();
+                } else {
+                    Thread.sleep(10);
+                }
+            }
+            return;
+        }
+
+        this.argv = argv;
         createHost();
     }
 
@@ -152,15 +239,15 @@ public class RishTerminal {
             waitForProcessExit();
         }
         try {
-            exitCode = requestExitCode();
+            exitCode.set(requestExitCode());
         } catch (Throwable e) {
             Log.w(TAG, Log.getStackTraceString(e));
-            exitCode = -1;
+            exitCode.set(-1);
         }
-        return exitCode;
+        return exitCode.get();
     }
 
     public int getExitCode() {
-        return exitCode;
+        return exitCode.get();
     }
 }

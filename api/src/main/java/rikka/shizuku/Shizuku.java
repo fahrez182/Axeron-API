@@ -438,13 +438,8 @@ public class Shizuku {
      * </p>
      *
      * @return RemoteProcess holds the binder of remote process
-     * @deprecated This method should only be used when you are transitioning from "su".
-     * Use {@link Shizuku#transactRemote(Parcel, Parcel, int)} for binder calls and {@link Shizuku#bindUserService(UserServiceArgs, ServiceConnection)}
-     * for complicated requirements.
-     * <p>This method is planned to be removed from Shizuku API 14.
      */
-    @Deprecated
-    private static ShizukuRemoteProcess newProcess(@NonNull String[] cmd, @Nullable String[] env, @Nullable String dir) {
+    public static ShizukuRemoteProcess newProcess(@NonNull String[] cmd, @Nullable String[] env, @Nullable String dir) {
         try {
             return new ShizukuRemoteProcess(requireService().newProcess(cmd, env, dir));
         } catch (RemoteException e) {
