@@ -2,6 +2,7 @@ plugins {
     alias(libs.plugins.android.application) apply false
     alias(libs.plugins.kotlin.android) apply false
     alias(libs.plugins.android.library) apply false
+    alias(libs.plugins.kotlin.compose) apply false
 }
 
 allprojects {
@@ -13,6 +14,13 @@ allprojects {
 }
 
 apply(from = "manifest.gradle.kts")
+val gitCommitCount = providers.exec {
+    commandLine("git", "rev-list", "--count", "HEAD")
+}.standardOutput.asText.get().trim().toInt()
+val verCode = findProperty("api_version_code") as Int
+val verName = "${findProperty("api_version_name")}.r${gitCommitCount}"
+extra["version_code"] = verCode
+extra["version_name"] = verName
 
 subprojects {
     plugins.withId("com.android.library") {

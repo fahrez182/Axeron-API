@@ -93,7 +93,7 @@ public class RishTerminal {
     public void start() {
         Log.d(TAG, "start");
 
-        ttyFd = start(tty, getFd(stdin, 1), getFd(stdout, 0), getFd(stdout, 0));
+        ttyFd = start(tty, getFd(stdin, 1), getFd(stdout, 0), getFd(stderr, 0));
 
         if (ttyFd != -1) {
             new Thread(() -> {
@@ -148,7 +148,9 @@ public class RishTerminal {
     public int waitFor() {
         Log.d(TAG, "waitFor");
 
-        waitForProcessExit();
+        if (ttyFd != -1) {
+            waitForProcessExit();
+        }
         try {
             exitCode = requestExitCode();
         } catch (Throwable e) {

@@ -67,6 +67,13 @@ static jintArray RishHost_startHost(
     bool out_tty = tty & ATTY_OUT;
     bool err_tty = tty & ATTY_ERR;
 
+    LOGD("[START] RishHost_startHost");
+    LOGD("[MODE ] tty=0x%02x in_tty=%d out_tty=%d err_tty=%d",
+         tty, in_tty ? 1 : 0, out_tty ? 1 : 0, err_tty ? 1 : 0);
+
+    LOGD("[FD   ] client stdin_read=%d stdout_write=%d stderr_write=%d",
+         stdin_read, stdout_write, stderr_write); // [LOG+]
+
     int ptmx = -1;
     if (tty) {
         ptmx = open_ptmx();
@@ -74,21 +81,29 @@ static jintArray RishHost_startHost(
             env->ThrowNew(env->FindClass("java/lang/IllegalStateException"), "Unable to open ptmx");
             return nullptr;
         }
-        LOGD("ptmx %d", ptmx);
+        LOGD("[PTY  ] ptmx=%d", ptmx);
+    } else {
+        LOGD("[PIPE ] tty==0, PTY disabled"); // [LOG+]
     }
 
     int stdin_pipe[2]{-1}, stdout_pipe[2]{-1}, stderr_pipe[2]{-1};
 
-    LOGD("istty stdin %d stdout %d stderr %d", (tty & ATTY_IN) ? 1 : 0, (tty & ATTY_OUT) ? 1 : 0, (tty & ATTY_ERR) ? 1 : 0);
+    LOGD("[TTY? ] istty in=%d out=%d err=%d",
+         (tty & ATTY_IN) ? 1 : 0,
+         (tty & ATTY_OUT) ? 1 : 0,
+         (tty & ATTY_ERR) ? 1 : 0);
 
     if (!in_tty) {
         pipe2(stdin_pipe, 0);
+        LOGD("[PIPE ] stdin_pipe r=%d w=%d", stdin_pipe[0], stdin_pipe[1]); // [LOG+]
     }
     if (!out_tty) {
         pipe2(stdout_pipe, 0);
+        LOGD("[PIPE ] stdout_pipe r=%d w=%d", stdout_pipe[0], stdout_pipe[1]); // [LOG+]
     }
     if (!err_tty) {
         pipe2(stderr_pipe, 0);
+        LOGD("[PIPE ] stderr_pipe r=%d w=%d", stderr_pipe[0], stderr_pipe[1]); // [LOG+]
     }
 
     const char *pargBlock = getBytes(env, argBlock);
@@ -97,7 +112,7 @@ static jintArray RishHost_startHost(
     initVectorFromBlock(argv + 1, pargBlock, argc);
 
     for (int i = 0; i < argc + 2; ++i) {
-        LOGD("arg%d=%s", i, argv[i]);
+        LOGD("[ARGV ] arg%d=%s", i, argv[i]);
     }
 
     const char **envv = nullptr;
@@ -107,11 +122,15 @@ static jintArray RishHost_startHost(
         envv = NEW(const char *, envc + 1);
 
         initVectorFromBlock(envv, penvBlock, envc);
+        LOGD("[ENV  ] envc=%d", envc); // [LOG+]
+    } else {
+        LOGD("[ENV  ] no env"); // [LOG+]
     }
 
     const char *pdir = nullptr;
     if (dirBlock) {
         pdir = getBytes(env, dirBlock);
+        LOGD("[CWD  ] requested dir=%s", pdir); // [LOG+]
     }
 
     auto pid = fork();
@@ -119,15 +138,20 @@ static jintArray RishHost_startHost(
         releaseBytes(env, argBlock, pargBlock);
         releaseBytes(env, envBlock, penvBlock);
         releaseBytes(env, dirBlock, pdir);
-
-        env->ThrowNew(env->FindClass("java/lang/IllegalStateException"), "Unable to fork");
+        LOGE("[FORK ] fork failed");
+        env->ThrowNew(env->FindClass("java/lang/IllegalStateException"),
+                      "Unable to fork");
         return nullptr;
     }
 
+    /* =========================
+     * PARENT
+     * ========================= */
     if (pid > 0) {
         releaseBytes(env, argBlock, pargBlock);
         releaseBytes(env, envBlock, penvBlock);
         releaseBytes(env, dirBlock, pdir);
+        LOGD("[PARENT] pid=%d", pid); // [LOG+]
 
         auto called = std::make_shared<std::atomic_bool>(false);
         auto func = [pid, called]() {
@@ -135,27 +159,34 @@ static jintArray RishHost_startHost(
                 return;
             }
 
-            LOGW("client dead, kill forked process");
+            LOGW("[PARENT] client dead, kill child pid=%d", pid);
             kill(pid, SIGKILL);
         };
 
         if (in_tty) {
-            transfer_async(stdin_read, ptmx/*, func*/);
+            LOGD("[PARENT] stdin: client -> ptmx"); // [LOG+]
+            transfer_async(stdin_read, ptmx);
         } else {
-            transfer_async(stdin_read, stdin_pipe[1]/*, func*/);
+            LOGD("[PARENT] stdin: client -> pipe"); // [LOG+]
+            transfer_async(stdin_read, stdin_pipe[1]);
             close(stdin_pipe[0]);
         }
 
         if (out_tty) {
+            LOGD("[PARENT] stdout: ptmx -> client"); // [LOG+]
             transfer_async(ptmx, stdout_write, func);
         } else {
+            LOGD("[PARENT] stdout: pipe -> client"); // [LOG+]
             transfer_async(stdout_pipe[0], stdout_write, func);
             close(stdout_pipe[1]);
         }
 
         if (!err_tty) {
-            transfer_async(stderr_pipe[0], stderr_write/*, func*/);
+            LOGD("[PARENT] stderr: pipe -> client"); // [LOG+]
+            transfer_async(stderr_pipe[0], stderr_write);
             close(stderr_pipe[1]);
+        } else {
+            LOGD("[PARENT] stderr: via ptmx"); // [LOG+]
         }
 
         auto result = env->NewIntArray(2);
@@ -163,22 +194,26 @@ static jintArray RishHost_startHost(
         env->SetIntArrayRegion(result, 1, 1, &ptmx);
         return result;
     } else {
+        /* =========================
+     * CHILD
+     * ========================= */
+        LOGD("[CHILD ] pid=%d starting", getpid()); // [LOG+]
+
         if (setsid() < 0) {
-            PLOGE("setsid");
+            PLOGE("[CHILD ] setsid failed");
             exit(1);
         }
 
         if (pdir) {
-            LOGD("attempt to chdir %s", pdir);
-
+            LOGD("[CHILD ] chdir attempt: %s", pdir);
             if (access(pdir, X_OK) == 0) {
                 if (chdir(pdir) == -1) {
-                    PLOGE("chdir %s", pdir);
+                    PLOGE("[CHILD ] chdir failed");
                 } else {
-                    LOGD("chdir %s", pdir);
+                    LOGD("[CHILD ] chdir ok");
                 }
             } else {
-                PLOGE("access %s", pdir);
+                PLOGE("[CHILD ] access denied");
             }
         }
 
@@ -186,50 +221,55 @@ static jintArray RishHost_startHost(
         if (tty) {
             char pts_slave[PATH_MAX]{0};
             if (ptsname_r(ptmx, pts_slave, PATH_MAX - 1) == -1) {
-                PLOGE("ptsname_r");
+                PLOGE("[CHILD ] ptsname_r failed");
                 exit(1);
             }
 
             if ((pts = open(pts_slave, O_RDWR)) == -1) {
-                PLOGE("open %s", pts_slave);
+                PLOGE("[CHILD ] open pts failed");
             }
-            LOGD("pts %d", pts);
+            LOGD("[CHILD ] pts=%d (%s)", pts, pts_slave);
         } else {
-            LOGD("no need pts");
+            LOGD("[CHILD ] no PTY, pipe mode");
         }
 
         if (in_tty) {
             dup2(pts, STDIN_FILENO);
-            LOGD("pts -> in");
+            LOGD("[CHILD ] stdin <- pts");
         } else {
             dup2(stdin_pipe[0], STDIN_FILENO);
             close(stdin_pipe[1]);
-            LOGD("pipe -> in");
+            LOGD("[CHILD ] stdin <- pipe");
         }
 
         if (out_tty) {
             dup2(pts, STDOUT_FILENO);
-            LOGD("pts -> out");
+            LOGD("[CHILD ] stdout <- pts");
         } else {
             dup2(stdout_pipe[1], STDOUT_FILENO);
             close(stdout_pipe[0]);
-            LOGD("pipe -> out");
+            LOGD("[CHILD ] stdout <- pipe");
         }
 
         if (err_tty) {
             dup2(pts, STDERR_FILENO);
-            LOGD("pts -> err");
+            LOGD("[CHILD ] stderr <- pts");
         } else {
             dup2(stderr_pipe[1], STDERR_FILENO);
             close(stderr_pipe[0]);
-            LOGD("pipe -> err");
+            LOGD("[CHILD ] stderr <- pipe");
         }
 
-        LOGD("istty stdin %d stdout %d stderr %d", isatty(STDIN_FILENO), isatty(STDOUT_FILENO), isatty(STDERR_FILENO));
+        LOGD("[CHILD ] isatty stdin=%d stdout=%d stderr=%d",
+             isatty(STDIN_FILENO),
+             isatty(STDOUT_FILENO),
+             isatty(STDERR_FILENO));
 
         if (pts != -1) {
             close(pts);
         }
+
+        LOGD("[EXEC ] exec /system/bin/sh"); // [LOG+]
 
         if (envv) {
             if (execvpe("/system/bin/sh", (char *const *) argv, (char *const *) envv) == -1) {
@@ -245,6 +285,7 @@ static jintArray RishHost_startHost(
         exit(0);
     }
 }
+
 
 static void RishHost_setWindowSize(JNIEnv *env, jclass clazz, jint ptmx, jlong size) {
     setWindowSize(ptmx, size);
