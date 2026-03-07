@@ -1,6 +1,9 @@
 package frb.axeron.server;
 
+import android.annotation.SuppressLint;
 import android.app.ActivityThread;
+import android.app.Application;
+import android.app.Instrumentation;
 import android.content.Context;
 import android.content.ContextHidden;
 import android.ddm.DdmHandleAppName;
@@ -13,6 +16,8 @@ import android.util.Log;
 import androidx.annotation.Nullable;
 
 import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 
 import dev.rikka.tools.refine.Refine;
 import kotlin.Triple;
@@ -67,16 +72,25 @@ public class UserService {
             UserHandle userHandle = Refine.unsafeCast(
                     UserHandleHidden.of(userId));
             Context context = Refine.<ContextHidden>unsafeCast(systemContext).createPackageContextAsUser(pkg, Context.CONTEXT_INCLUDE_CODE | Context.CONTEXT_IGNORE_SECURITY, userHandle);
-//            Field mPackageInfo = context.getClass().getDeclaredField("mPackageInfo");
-//            mPackageInfo.setAccessible(true);
-//            Object loadedApk = mPackageInfo.get(context);
-//            Method makeApplication = loadedApk.getClass().getDeclaredMethod("makeApplication", boolean.class, Instrumentation.class);
-//            Application application = (Application) makeApplication.invoke(loadedApk, true, null);
-//            Field mInitialApplication = activityThread.getClass().getDeclaredField("mInitialApplication");
-//            mInitialApplication.setAccessible(true);
-//            mInitialApplication.set(activityThread, application);
 
-            ClassLoader classLoader = context.getClassLoader();
+            Application application;
+            try {
+                Field mPackageInfo = context.getClass().getDeclaredField("mPackageInfo");
+                mPackageInfo.setAccessible(true);
+                Object loadedApk = mPackageInfo.get(context);
+                Method makeApplication = loadedApk.getClass().getDeclaredMethod("makeApplication", boolean.class, Instrumentation.class);
+                application = (Application) makeApplication.invoke(loadedApk, true, null);
+                @SuppressLint("DiscouragedPrivateApi") Field mInitialApplication = activityThread.getClass().getDeclaredField("mInitialApplication");
+                mInitialApplication.setAccessible(true);
+                mInitialApplication.set(activityThread, application);
+            } catch (Throwable e) {
+                // Catch any errors initializing the application, and use the old Context method as a fallback instead
+                // Especially relevant for MediaTek devices, see GitHub issue 1171
+                Log.w(TAG, "Failed to initialize Application, using Context as fallback", e);
+                application = null;
+            }
+
+            ClassLoader classLoader = (application != null ? application.getClassLoader() : context.getClassLoader());
             Class<?> serviceClass = classLoader.loadClass(cls);
             Constructor<?> constructorWithContext = null;
             try {
@@ -84,7 +98,7 @@ public class UserService {
             } catch (NoSuchMethodException | SecurityException ignored) {
             }
             if (constructorWithContext != null) {
-                service = (IBinder) constructorWithContext.newInstance(context);
+                service = (IBinder) constructorWithContext.newInstance(application != null ? application : context);
             } else {
                 service = (IBinder) serviceClass.getDeclaredConstructor().newInstance();
             }
