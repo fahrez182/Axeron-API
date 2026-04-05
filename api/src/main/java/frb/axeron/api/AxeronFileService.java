@@ -394,6 +394,10 @@ public class AxeronFileService implements Parcelable {
             return new FileOutputStream(outputFd.getFileDescriptor());
         }
 
+        public FileInputStream getInputStream() {
+            return new FileInputStream(inputFd.getFileDescriptor());
+        }
+
         @Override
         public void close() {
             try {

@@ -637,33 +637,71 @@ object AxeronPluginService {
         }
     }
 
-    private suspend fun ensureScripts(): Boolean = withContext(Dispatchers.IO) {
-        val files = application.assets.list("scripts") ?: return@withContext false
-        if (files.isEmpty()) return@withContext false
+    private fun isProbablyText(file: File): Boolean {
+        if (!axFS.exists(file.absolutePath)) return false
+        return try {
+            val inputStream = axFS.setFileInputStream(file.absolutePath)
+            val buffer = ByteArray(512) // Baca 512 byte pertama saja
+            val bytesRead = inputStream.read(buffer)
+            inputStream.close()
 
-        if (!axFS.exists(AXERONBIN) && !axFS.mkdirs(AXERONBIN)) return@withContext false
+            if (bytesRead <= 0) return false
 
-        for (filename in files) {
-            val inPath = "assets/scripts/$filename"
-            val dstFile = File(AXERONBIN, filename)
-
-            if (axFS.exists(dstFile.absolutePath)) continue
-
-            val dst = dstFile.absolutePath
-
-            val cmd =
-                "$BUSYBOX unzip -p $BASEAPK assets/scripts/$filename > $dst" +
-                        " && chmod 755 $dst" +
-                        " && (file -b $dst | grep -Eqi 'text|script' && dos2unix $dst || true)"
-
-            val result = execWithIO(cmd, hideStderr = false)
-
-            if (!result.isSuccess()) {
-                Log.e(TAG, "$inPath failed: ${result.err}")
-                return@withContext false
+            // 1. Check Shebang (#! ) - Pasti script
+            if (bytesRead >= 2 && buffer[0] == 0x23.toByte() && buffer[1] == 0x21.toByte()) {
+                return true
             }
 
-            Log.i(TAG, "$filename extracted")
+            // 2. Check Binary Signatures (ELF, DEX, ZIP) - Pasti bukan script
+            // ELF: 7F 45 4C 46
+            if (bytesRead >= 4 && buffer[0] == 0x7F.toByte() && buffer[1] == 0x45.toByte() &&
+                buffer[2] == 0x4C.toByte() && buffer[3] == 0x46.toByte()) return false
+
+            // DEX: 64 65 78
+            if (bytesRead >= 3 && buffer[0] == 0x64.toByte() && buffer[1] == 0x65.toByte() &&
+                buffer[2] == 0x78.toByte()) return false
+
+            // 3. Fallback: Check if it's readable text (no null bytes)
+            for (i in 0 until bytesRead) {
+                if (buffer[i] == 0.toByte()) return false // Binary file biasanya punya null bytes
+            }
+
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+
+    private suspend fun ensureScripts(): Boolean = withContext(Dispatchers.IO) {
+        val files = application.assets.list("scripts") ?: return@withContext false
+
+        if (files.isEmpty()) return@withContext false
+
+        val binDir = AXERONBIN
+
+        if (!axFS.exists(binDir) && !axFS.mkdirs(binDir)) return@withContext false
+
+        for (filename in files) {
+            // Step 1: Ekstrak dulu ke folder temporary atau folder utama
+            val dstFile = File(binDir, filename)
+            if (axFS.exists(dstFile.absolutePath)) continue
+
+            // Ekstrak file
+            val extractCmd = "$BUSYBOX unzip -p $BASEAPK assets/scripts/$filename > ${dstFile.absolutePath} && chmod 755 ${dstFile.absolutePath}"
+            execWithIO(extractCmd)
+
+            // Step 2: Cek tipe file secara advance
+            val isText = isProbablyText(dstFile)
+
+            if (isText) {
+                // Jika text/script, jalankan dos2unix
+                val fixCmd = "$BUSYBOX dos2unix ${dstFile.absolutePath}"
+                execWithIO(fixCmd)
+                Log.i(TAG, "$filename (Script) fixed with dos2unix")
+            } else {
+                Log.i(TAG, "$filename (Binary) skipped")
+            }
         }
         return@withContext true
     }
