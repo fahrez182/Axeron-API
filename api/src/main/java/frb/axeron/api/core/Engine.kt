@@ -2,9 +2,9 @@ package frb.axeron.api.core
 
 import android.app.Application
 import android.content.Context
+import android.content.Intent
 import android.os.Process
 import android.util.Log
-import frb.axeron.api.Axeron
 import java.io.File
 import kotlin.system.exitProcess
 
@@ -39,17 +39,26 @@ open class Engine: Application() {
         super.onCreate()
 
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
-            // log error
-            Log.e("Engine", "Uncaught exception in thread ${thread.name}", throwable)
-            Log.i("Engine", "Force stop AxeronService")
-            if (Axeron.pingBinder()) {
-                Axeron.destroy()
-            }
-            // contoh: simpan ke file log
+            val errorLog = Log.getStackTraceString(throwable)
+
             saveCrashLog(throwable)
 
+            // Buka CrashActivity
+            val intent = Intent().apply {
+                setClassName(packageName, "frb.axeron.manager.ui.CrashActivity")
+                putExtra("error_log", errorLog)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+            }
+
+            try {
+                startActivity(intent)
+            } catch (e: Exception) {
+                Log.e("Engine", "Failed to start CrashActivity", e)
+            }
+
+            // Matikan proses saat ini agar bersih
             Process.killProcess(Process.myPid())
-            exitProcess(1) // exit code bebas
+            exitProcess(10)
         }
     }
 }
