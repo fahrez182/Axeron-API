@@ -437,6 +437,7 @@ object AxeronPluginService {
     //===================================
 
     suspend fun resetManagerNative(
+        rootMode: Boolean,
         onStdout: (String) -> Unit,
         onStderr: (String) -> Unit,
     ): FlashResult = withContext(Dispatchers.IO) {
@@ -444,24 +445,34 @@ object AxeronPluginService {
         fun out(s: String) = onStdout(s + "\n")
         fun err(s: String) = onStderr(s + "\n")
 
+        val axeronDir = PathHelper.getWorkingPath(rootMode, AxeronApiConstant.folder.PARENT).absolutePath
+        val pluginDir = PathHelper.getWorkingPath(
+            rootMode,
+            AxeronApiConstant.folder.PARENT_PLUGIN
+        ).absolutePath
+        val binDir = PathHelper.getWorkingPath(
+            rootMode,
+            AxeronApiConstant.folder.PARENT_BINARY
+        ).absolutePath
+
         out("Resetting AxManager")
-        out("at $AXERONDIR")
+        out("at $axeronDir")
         out("- Removing plugins")
 
         // 1) mark plugin remove
         val fs = axFS
-        val pluginsDir = fs?.getDirectories(PLUGINDIR) ?: emptyList()
-        if (pluginsDir.isEmpty()) {
+        val pluginsDirs = fs?.getDirectories(pluginDir) ?: emptyList()
+        if (pluginsDirs.isEmpty()) {
             out("- No plugins directory")
         } else {
-            pluginsDir.filter {
+            pluginsDirs.filter {
                 it.isDirectory
-            }.forEach { pluginDir ->
-                out("- Mark to remove ${pluginDir.path}")
+            }.forEach { plugin ->
+                out("- Mark to remove ${plugin.path}")
                 runCatching {
-                    fs?.createNewFile(File(pluginDir.path, "remove").absolutePath)
+                    fs?.createNewFile(File(plugin.path, "remove").absolutePath)
                 }.onFailure {
-                    err("!! failed touch ${pluginDir.path}/remove : ${it.message}")
+                    err("!! failed touch ${plugin.path}/remove : ${it.message}")
                 }
             }
         }
@@ -470,6 +481,7 @@ object AxeronPluginService {
         out("- Running igniter (native)")
         runCatching {
             igniteSuspendService(false,
+                binDir,
                 onStdout,
                 onStderr)
         }.onFailure {
@@ -480,7 +492,7 @@ object AxeronPluginService {
         // 3) hapus folder
         out("- Removing AXERONDIR")
         runCatching {
-            execWithIO("rm -rf \"$AXERONDIR\"")
+            execWithIO("rm -rf \"$axeronDir\"")
         }.getOrElse {
             err("!! deleteRecursively error: ${it.message}")
             false
@@ -556,6 +568,7 @@ object AxeronPluginService {
 
     suspend fun igniteSuspendService(
         ensure: Boolean = true,
+        binDir: String = AXERONBIN,
         onStdout: (String) -> Unit = {},
         onStderr: (String) -> Unit = {}
     ): Boolean =
@@ -585,7 +598,7 @@ object AxeronPluginService {
             }
 
             val cmd =
-                "CLASSPATH=$AXERONBIN/ax_reignite.dex; app_process / frb.axeron.reignite.Igniter ${AxeronSettings.getEnableDeveloperOptions()}"
+                "CLASSPATH=$binDir/ax_reignite.dex; app_process / frb.axeron.reignite.Igniter ${AxeronSettings.getEnableDeveloperOptions()}"
 
             Log.d(TAG, "Start Init Service")
 
