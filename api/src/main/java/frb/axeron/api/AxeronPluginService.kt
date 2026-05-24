@@ -59,8 +59,8 @@ object AxeronPluginService {
             AxeronApiConstant.folder.PARENT_PLUGIN_UPDATE
         ).absolutePath
 
-    val axFS
-        get() = Axeron.newFileService()!!
+    private val axFS: AxeronFileService?
+        get() = Axeron.newFileService()
 
     fun getUid(context: Context, packageName: String): Int? =
         try {
@@ -162,6 +162,7 @@ object AxeronPluginService {
         onStdout: (String) -> Unit,
         onStderr: (String) -> Unit
     ): FlashResult {
+        val fs = axFS ?: return FlashResult(-1, "Axeron service unavailable", false)
         val resolver = application.contentResolver
         with(resolver.openInputStream(installer.uri)) {
             val file =
@@ -170,12 +171,14 @@ object AxeronPluginService {
                     "module.zip"
                 )
 
-            val fos = axFS.getStreamSession(file.absolutePath, true, false).outputStream
+            val session = fs.getStreamSession(file.absolutePath, true, false)
+                ?: return FlashResult(-1, "Failed to create stream session", false)
+            val fos = session.outputStream
 
             val buffer = ByteArray(8 * 1024)
             var bytesRead: Int
             while (this?.read(buffer).also {
-                    bytesRead = it!!
+                    bytesRead = it ?: -1
                 } != -1) {
                 fos.write(buffer, 0, bytesRead)
             }
@@ -188,7 +191,7 @@ object AxeronPluginService {
 
             Log.i(TAG, "install module ${installer.uri} result: $result")
 
-            axFS.delete(file.absolutePath)
+            fs.delete(file.absolutePath)
 
             return FlashResult(result)
         }
@@ -380,31 +383,32 @@ object AxeronPluginService {
 
 
     fun togglePlugin(dirId: String, enable: Boolean): Boolean {
+        val fs = axFS ?: return false
         val path = "$PLUGINDIR/$dirId"
         val updatePath = "$PLUGINUPDATEDIR/$dirId"
 
         if (enable) {
             // hapus disable di plugin folder
-            axFS.delete("$path/disable")
+            fs.delete("$path/disable")
 
             //buat file jika memang dari awal gak ada keduanya
-            if (!axFS.exists("$updatePath/update_disable") && !axFS.exists("$updatePath/update_enable")) {
-                return axFS.createNewFile("$updatePath/update_enable")
+            if (!fs.exists("$updatePath/update_disable") && !fs.exists("$updatePath/update_enable")) {
+                return fs.createNewFile("$updatePath/update_enable")
             }
 
             // hapus update_disable jika ada
-            axFS.delete("$updatePath/update_disable")
+            fs.delete("$updatePath/update_disable")
             // buat update_enable kalau belum ada
 
         } else {
-            axFS.createNewFile("$path/disable")
+            fs.createNewFile("$path/disable")
 
             // kalau update_enable ada, hapus update_enable
-            if (!axFS.exists("$updatePath/update_enable") && !axFS.exists("$updatePath/update_disable")) {
-                return axFS.createNewFile("$updatePath/update_disable")
+            if (!fs.exists("$updatePath/update_enable") && !fs.exists("$updatePath/update_disable")) {
+                return fs.createNewFile("$updatePath/update_disable")
             }
 
-            axFS.delete("$updatePath/update_enable")
+            fs.delete("$updatePath/update_enable")
         }
 
         // kalau semua file sudah sesuai kondisi, return true
@@ -413,17 +417,19 @@ object AxeronPluginService {
 
 
     fun uninstallPlugin(dirId: String): Boolean {
+        val fs = axFS ?: return false
         val path = "$PLUGINDIR/$dirId"
         val updatePath = "$PLUGINUPDATEDIR/$dirId"
 
-        return axFS.createNewFile("$path/remove") && axFS.createNewFile("$updatePath/update_remove")
+        return fs.createNewFile("$path/remove") && fs.createNewFile("$updatePath/update_remove")
     }
 
     fun restorePlugin(dirId: String): Boolean {
+        val fs = axFS ?: return false
         val path = "$PLUGINDIR/$dirId"
         val updatePath = "$PLUGINUPDATEDIR/$dirId"
 
-        return axFS.delete("$path/remove") && axFS.delete("$updatePath/update_remove")
+        return fs.delete("$path/remove") && fs.delete("$updatePath/update_remove")
     }
 
     //===================================
@@ -443,7 +449,8 @@ object AxeronPluginService {
         out("- Removing plugins")
 
         // 1) mark plugin remove
-        val pluginsDir = axFS.getDirectories(PLUGINDIR)
+        val fs = axFS
+        val pluginsDir = fs?.getDirectories(PLUGINDIR) ?: emptyList()
         if (pluginsDir.isEmpty()) {
             out("- No plugins directory")
         } else {
@@ -452,7 +459,7 @@ object AxeronPluginService {
             }.forEach { pluginDir ->
                 out("- Mark to remove ${pluginDir.path}")
                 runCatching {
-                    axFS.createNewFile(File(pluginDir.path, "remove").absolutePath)
+                    fs?.createNewFile(File(pluginDir.path, "remove").absolutePath)
                 }.onFailure {
                     err("!! failed touch ${pluginDir.path}/remove : ${it.message}")
                 }
@@ -597,14 +604,15 @@ object AxeronPluginService {
 
 
     suspend fun removeScripts() = withContext(Dispatchers.IO) {
+        val fs = axFS ?: return@withContext
         val files = application.assets.list("scripts") ?: return@withContext
         if (files.isEmpty()) return@withContext
 
         for (filename in files) {
             val dstFile = File(AXERONBIN, filename)
-            if (!axFS.exists(dstFile.absolutePath)) continue
+            if (!fs.exists(dstFile.absolutePath)) continue
 
-            if (!axFS.delete(dstFile.absolutePath)) {
+            if (!fs.delete(dstFile.absolutePath)) {
                 Log.e(TAG, "failed to remove ${dstFile.absolutePath}")
                 continue
             }
@@ -614,10 +622,11 @@ object AxeronPluginService {
     }
 
     suspend fun removeLibrary() = withContext(Dispatchers.IO) {
+        val fs = axFS ?: return@withContext
         val dstBusybox = File(AXERONBIN, "busybox")
 
-        if (axFS.exists(dstBusybox.absolutePath)) {
-            if (!axFS.delete(dstBusybox.absolutePath)) {
+        if (fs.exists(dstBusybox.absolutePath)) {
+            if (!fs.delete(dstBusybox.absolutePath)) {
                 return@withContext
             }
 
@@ -632,15 +641,16 @@ object AxeronPluginService {
             Log.i(TAG, "symlink from busybox removed")
         }
         val dstResetprop = File(AXERONBIN, "resetprop")
-        if (axFS.exists(dstResetprop.absolutePath)) {
-            axFS.delete(dstResetprop.absolutePath)
+        if (fs.exists(dstResetprop.absolutePath)) {
+            fs.delete(dstResetprop.absolutePath)
         }
     }
 
     private fun isProbablyText(file: File): Boolean {
-        if (!axFS.exists(file.absolutePath)) return false
+        val fs = axFS ?: return false
+        if (!fs.exists(file.absolutePath)) return false
         return try {
-            val inputStream = axFS.setFileInputStream(file.absolutePath)
+            val inputStream = fs.setFileInputStream(file.absolutePath)
             val buffer = ByteArray(512) // Baca 512 byte pertama saja
             val bytesRead = inputStream.read(buffer)
             inputStream.close()
@@ -674,18 +684,19 @@ object AxeronPluginService {
 
 
     private suspend fun ensureScripts(): Boolean = withContext(Dispatchers.IO) {
+        val fs = axFS ?: return@withContext false
         val files = application.assets.list("scripts") ?: return@withContext false
 
         if (files.isEmpty()) return@withContext false
 
         val binDir = AXERONBIN
 
-        if (!axFS.exists(binDir) && !axFS.mkdirs(binDir)) return@withContext false
+        if (!fs.exists(binDir) && !fs.mkdirs(binDir)) return@withContext false
 
         for (filename in files) {
             // Step 1: Ekstrak dulu ke folder temporary atau folder utama
             val dstFile = File(binDir, filename)
-            if (axFS.exists(dstFile.absolutePath)) continue
+            if (fs.exists(dstFile.absolutePath)) continue
 
             // Ekstrak file
             val extractCmd = "$BUSYBOX unzip -p $BASEAPK assets/scripts/$filename > ${dstFile.absolutePath} && chmod 755 ${dstFile.absolutePath}"
@@ -707,13 +718,14 @@ object AxeronPluginService {
     }
 
     suspend fun ensureLibrary(): Boolean = withContext(Dispatchers.IO) {
+        val fs = axFS ?: return@withContext false
         return@withContext try {
-            if (!axFS.exists(AXERONBIN) && !axFS.mkdirs(AXERONBIN)) return@withContext false
+            if (!fs.exists(AXERONBIN) && !fs.mkdirs(AXERONBIN)) return@withContext false
 
             val dstBusyBox = File(AXERONBIN, "busybox")
             val dstResetProp = File(AXERONBIN, "resetprop")
 
-            if (axFS.exists(dstBusyBox.absolutePath) && axFS.exists(dstResetProp.absolutePath)) return@withContext true
+            if (fs.exists(dstBusyBox.absolutePath) && fs.exists(dstResetProp.absolutePath)) return@withContext true
 
             val cmdBB =
                 "cp $BUSYBOX ${dstBusyBox.absolutePath} && chmod 755 ${dstBusyBox.absolutePath}" +

@@ -85,8 +85,9 @@ public class Axeron {
         if (permissionGranted) return PackageManager.PERMISSION_GRANTED;
         try {
             permissionGranted = requireService().checkSelfPermission();
-        } catch (RemoteException e) {
-            throw rethrowAsRuntimeException(e);
+        } catch (RemoteException | IllegalStateException e) {
+            Log.e(TAG, "checkSelfPermission", e);
+            return PackageManager.PERMISSION_DENIED;
         }
         return permissionGranted ? PackageManager.PERMISSION_GRANTED : PackageManager.PERMISSION_DENIED;
     }
@@ -96,8 +97,9 @@ public class Axeron {
         if (shouldShowRequestPermissionRationale) return true;
         try {
             shouldShowRequestPermissionRationale = requireService().shouldShowRequestPermissionRationale();
-        } catch (RemoteException e) {
-            throw rethrowAsRuntimeException(e);
+        } catch (RemoteException | IllegalStateException e) {
+            Log.e(TAG, "shouldShowRequestPermissionRationale", e);
+            return false;
         }
         return shouldShowRequestPermissionRationale;
     }
@@ -137,8 +139,8 @@ public class Axeron {
     public static void requestPermission(int requestCode) {
         try {
             requireService().requestPermission(requestCode);
-        } catch (RemoteException e) {
-            throw rethrowAsRuntimeException(e);
+        } catch (RemoteException | IllegalStateException e) {
+            Log.e(TAG, "requestPermission", e);
         }
     }
 
@@ -294,16 +296,17 @@ public class Axeron {
     public static void enableShizukuService(boolean enable) {
         try {
             requireService().enableShizukuService(enable);
-        } catch (RemoteException e) {
-            throw new RuntimeException(e);
+        } catch (RemoteException | IllegalStateException e) {
+            Log.e(TAG, "enableShizukuService", e);
         }
     }
 
     protected static boolean isFirstInit(boolean markAsFirstInit) {
         try {
             return requireService().isFirstInit(markAsFirstInit);
-        } catch (RemoteException e) {
-            throw new RuntimeException(e);
+        } catch (RemoteException | IllegalStateException e) {
+            Log.e(TAG, "isFirstInit", e);
+            return false;
         }
     }
 
@@ -327,8 +330,9 @@ public class Axeron {
     public static AxeronFileService newFileService() {
         try {
             return new AxeronFileService(requireService().getFileService());
-        } catch (RemoteException e) {
-            throw new RuntimeException(e);
+        } catch (RemoteException | IllegalStateException e) {
+            Log.e(TAG, "newFileService", e);
+            return null;
         }
     }
 
@@ -336,9 +340,10 @@ public class Axeron {
         try {
 
             return new AxeronNewProcess(requireService().newProcess(cmd, env != null ? env.getEnv() : null, dir));
-        } catch (RemoteException | NullPointerException e) {
+        } catch (RemoteException | NullPointerException | IllegalStateException e) {
 //            Log.d(TAG, "Failed to execute command", e);
-            throw new RuntimeException("Failed to execute command", e);
+            Log.e(TAG, "newProcess", e);
+            return null;
         }
     }    private static final IBinder.DeathRecipient DEATH_RECIPIENT = () -> {
         binderReady = false;
@@ -404,8 +409,8 @@ public class Axeron {
     public static void transactRemote(@NonNull Parcel data, @Nullable Parcel reply, int flags) {
         try {
             requireService().asBinder().transact(BINDER_TRANSACTION_transact, data, reply, flags);
-        } catch (RemoteException e) {
-            throw rethrowAsRuntimeException("Axeron", e);
+        } catch (RemoteException | IllegalStateException e) {
+            Log.e(TAG, "transactRemote", e);
         }
     }
 
@@ -424,8 +429,8 @@ public class Axeron {
     public static void setNewEnvironment(Environment env) {
         try {
             requireService().setNewEnvironment(env);
-        } catch (RemoteException e) {
-            throw new RuntimeException(e);
+        } catch (RemoteException | IllegalStateException e) {
+            Log.e(TAG, "setNewEnvironment", e);
         }
     }
 
@@ -441,8 +446,9 @@ public class Axeron {
         if (getAxeronInfo().isRoot()) return PackageManager.PERMISSION_GRANTED;
         try {
             return requireService().checkPermission(permission);
-        } catch (RemoteException e) {
-            throw rethrowAsRuntimeException(e);
+        } catch (RemoteException | IllegalStateException e) {
+            Log.e(TAG, "checkRemotePermission", e);
+            return PackageManager.PERMISSION_DENIED;
         }
     }
 
@@ -462,8 +468,8 @@ public class Axeron {
     public static void attachUserService(@NonNull IBinder binder, @NonNull Bundle options) {
         try {
             requireService().attachUserService(binder, options);
-        } catch (RemoteException e) {
-            throw rethrowAsRuntimeException(e);
+        } catch (RemoteException | IllegalStateException e) {
+            Log.e(TAG, "attachUserService", e);
         }
     }
 
@@ -480,8 +486,8 @@ public class Axeron {
     public static void dispatchPermissionConfirmationResult(int requestUid, int requestPid, int requestCode, @NonNull Bundle data) {
         try {
             requireService().dispatchPermissionConfirmationResult(requestUid, requestPid, requestCode, data);
-        } catch (RemoteException e) {
-            throw rethrowAsRuntimeException(e);
+        } catch (RemoteException | IllegalStateException e) {
+            Log.e(TAG, "dispatchPermissionConfirmationResult", e);
         }
     }
 
@@ -489,8 +495,9 @@ public class Axeron {
     public static int getFlagsForUid(int uid, int mask) {
         try {
             return requireService().getFlagsForUid(uid, mask);
-        } catch (RemoteException e) {
-            throw rethrowAsRuntimeException(e);
+        } catch (RemoteException | IllegalStateException e) {
+            Log.e(TAG, "getFlagsForUid", e);
+            return 0;
         }
     }
 
@@ -498,8 +505,8 @@ public class Axeron {
     public static void updateFlagsForUid(int uid, int mask, int value) {
         try {
             requireService().updateFlagsForUid(uid, mask, value);
-        } catch (RemoteException e) {
-            throw rethrowAsRuntimeException(e);
+        } catch (RemoteException | IllegalStateException e) {
+            Log.e(TAG, "updateFlagsForUid", e);
         }
     }
 

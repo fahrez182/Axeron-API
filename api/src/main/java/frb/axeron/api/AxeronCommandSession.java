@@ -124,6 +124,10 @@ public class AxeronCommandSession {
                 ),
                 Axeron.getEnvironment(),
                 null);
+        if (process == null) {
+            errorListener("Failed to start process: Axeron service is unavailable");
+            return;
+        }
         writer = new BufferedWriter(new OutputStreamWriter(process.getOutputStream()));
         bufferedReader = new BufferedReader(new InputStreamReader(process.getInputStream()));
         bufferedError = new BufferedReader(new InputStreamReader(process.getErrorStream()));
