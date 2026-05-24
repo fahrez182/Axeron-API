@@ -191,11 +191,13 @@ public class AxeronSettings {
             LaunchMethod.UNKNOWN,
             LaunchMethod.ROOT,
             LaunchMethod.ADB,
+            LaunchMethod.ROOT_AS_SHELL,
     })
     @Retention(SOURCE)
     public @interface LaunchMethod {
         int UNKNOWN = -1;
         int ROOT = 0;
         int ADB = 1;
+        int ROOT_AS_SHELL = 2;
     }
 }
