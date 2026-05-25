@@ -584,7 +584,7 @@ object AxeronPluginService {
 
             if (Axeron.isFirstInit(true)) {
                 Log.i(TAG, "First Init: Removing old bin")
-                removeScripts()
+                removeScriptsAndBinaries()
                 removeLibrary()
                 fsBarrier()
             }
@@ -593,7 +593,7 @@ object AxeronPluginService {
                 if (!ensureLibrary()) return@withContext false
                 fsBarrier()
 
-                if (!ensureScripts()) return@withContext false
+                if (!ensureScriptsAndBinaries()) return@withContext false
                 fsBarrier()
             }
 
@@ -616,21 +616,21 @@ object AxeronPluginService {
         }
 
 
-    suspend fun removeScripts() = withContext(Dispatchers.IO) {
+    suspend fun removeScriptsAndBinaries() = withContext(Dispatchers.IO) {
         val fs = axFS ?: return@withContext
-        val files = application.assets.list("scripts") ?: return@withContext
-        if (files.isEmpty()) return@withContext
+        val binDir = AXERONBIN
 
-        for (filename in files) {
-            val dstFile = File(AXERONBIN, filename)
-            if (!fs.exists(dstFile.absolutePath)) continue
-
-            if (!fs.delete(dstFile.absolutePath)) {
-                Log.e(TAG, "failed to remove ${dstFile.absolutePath}")
-                continue
+        listOf("scripts", "binaries").forEach { folder ->
+            application.assets.list(folder)?.forEach { filename ->
+                val dstFile = File(binDir, filename)
+                if (fs.exists(dstFile.absolutePath)) {
+                    if (!fs.delete(dstFile.absolutePath)) {
+                        Log.e(TAG, "failed to remove ${dstFile.absolutePath}")
+                    } else {
+                        Log.i(TAG, "removed ${dstFile.absolutePath}")
+                    }
+                }
             }
-
-            Log.i(TAG, "removed ${dstFile.absolutePath}")
         }
     }
 
@@ -659,72 +659,53 @@ object AxeronPluginService {
         }
     }
 
-    private fun isProbablyText(file: File): Boolean {
-        val fs = axFS ?: return false
-        if (!fs.exists(file.absolutePath)) return false
-        return try {
-            val inputStream = fs.setFileInputStream(file.absolutePath)
-            val buffer = ByteArray(512) // Baca 512 byte pertama saja
-            val bytesRead = inputStream.read(buffer)
-            inputStream.close()
-
-            if (bytesRead <= 0) return false
-
-            // 1. Check Shebang (#! ) - Pasti script
-            if (bytesRead >= 2 && buffer[0] == 0x23.toByte() && buffer[1] == 0x21.toByte()) {
-                return true
+    private suspend fun copyStream(
+        inputStream: java.io.InputStream,
+        fs: AxeronFileService,
+        dstPath: String
+    ): Boolean = withContext(Dispatchers.IO) {
+        fs.getStreamSession(dstPath, true, false)?.use { session ->
+            val outputStream = session.outputStream
+            val buffer = ByteArray(64 * 1024)
+            var bytesRead: Int
+            while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                outputStream.write(buffer, 0, bytesRead)
             }
-
-            // 2. Check Binary Signatures (ELF, DEX, ZIP) - Pasti bukan script
-            // ELF: 7F 45 4C 46
-            if (bytesRead >= 4 && buffer[0] == 0x7F.toByte() && buffer[1] == 0x45.toByte() &&
-                buffer[2] == 0x4C.toByte() && buffer[3] == 0x46.toByte()) return false
-
-            // DEX: 64 65 78
-            if (bytesRead >= 3 && buffer[0] == 0x64.toByte() && buffer[1] == 0x65.toByte() &&
-                buffer[2] == 0x78.toByte()) return false
-
-            // 3. Fallback: Check if it's readable text (no null bytes)
-            for (i in 0 until bytesRead) {
-                if (buffer[i] == 0.toByte()) return false // Binary file biasanya punya null bytes
-            }
-
+            outputStream.flush()
             true
-        } catch (e: Exception) {
-            false
-        }
+        } ?: false
     }
 
-
-    private suspend fun ensureScripts(): Boolean = withContext(Dispatchers.IO) {
+    private suspend fun ensureScriptsAndBinaries(): Boolean = withContext(Dispatchers.IO) {
         val fs = axFS ?: return@withContext false
-        val files = application.assets.list("scripts") ?: return@withContext false
-
-        if (files.isEmpty()) return@withContext false
-
         val binDir = AXERONBIN
 
         if (!fs.exists(binDir) && !fs.mkdirs(binDir)) return@withContext false
 
-        for (filename in files) {
-            // Step 1: Ekstrak dulu ke folder temporary atau folder utama
-            val dstFile = File(binDir, filename)
-            if (fs.exists(dstFile.absolutePath)) continue
+        val assetManager = application.assets
+        val folders = mapOf("scripts" to true, "binaries" to false)
 
-            // Ekstrak file
-            val extractCmd = "$BUSYBOX unzip -p $BASEAPK assets/scripts/$filename > ${dstFile.absolutePath} && chmod 755 ${dstFile.absolutePath}"
-            execWithIO(extractCmd)
+        folders.forEach { (folder, isScript) ->
+            assetManager.list(folder)?.forEach { filename ->
+                val dstPath = File(binDir, filename).absolutePath
+                if (fs.exists(dstPath)) return@forEach
 
-            // Step 2: Cek tipe file secara advance
-            val isText = isProbablyText(dstFile)
+                runCatching {
+                    assetManager.open("$folder/$filename").use { inputStream ->
+                        if (copyStream(inputStream, fs, dstPath)) {
+                            execWithIO("chmod 755 \"$dstPath\"", useBusybox = false)
 
-            if (isText) {
-                // Jika text/script, jalankan dos2unix
-                val fixCmd = "$BUSYBOX dos2unix ${dstFile.absolutePath}"
-                execWithIO(fixCmd)
-                Log.i(TAG, "$filename (Script) fixed with dos2unix")
-            } else {
-                Log.i(TAG, "$filename (Binary) skipped")
+                            if (isScript) {
+                                execWithIO("$BUSYBOX dos2unix \"$dstPath\"", useBusybox = true)
+                                Log.i(TAG, "$filename (Script) fixed with dos2unix")
+                            } else {
+                                Log.i(TAG, "$filename (Binary) copied")
+                            }
+                        }
+                    }
+                }.onFailure {
+                    Log.e(TAG, "Failed to copy $folder/$filename", it)
+                }
             }
         }
         return@withContext true
@@ -735,28 +716,24 @@ object AxeronPluginService {
         return@withContext try {
             if (!fs.exists(AXERONBIN) && !fs.mkdirs(AXERONBIN)) return@withContext false
 
-            val dstBusyBox = File(AXERONBIN, "busybox")
-            val dstResetProp = File(AXERONBIN, "resetprop")
+            val dstBusyBox = File(AXERONBIN, "busybox").absolutePath
+            val dstResetProp = File(AXERONBIN, "resetprop").absolutePath
 
-            if (fs.exists(dstBusyBox.absolutePath) && fs.exists(dstResetProp.absolutePath)) return@withContext true
-
-            val cmdBB =
-                "cp $BUSYBOX ${dstBusyBox.absolutePath} && chmod 755 ${dstBusyBox.absolutePath}" +
-                        " && ${dstBusyBox.absolutePath} --install -s $AXERONBIN"
-
-            val rBB = execWithIO(cmdBB, useBusybox = false, hideStderr = false)
-            if (!rBB.isSuccess()) {
-                Log.e(TAG, "Failed to ensure busybox: ${rBB.err}")
-                return@withContext false
+            if (!fs.exists(dstBusyBox)) {
+                java.io.FileInputStream(BUSYBOX).use { inputStream ->
+                    if (copyStream(inputStream, fs, dstBusyBox)) {
+                        execWithIO("chmod 755 \"$dstBusyBox\"", useBusybox = false)
+                        execWithIO("\"$dstBusyBox\" --install -s \"$AXERONBIN\"", useBusybox = false)
+                    }
+                }
             }
 
-            val cmdRP =
-                "cp $RESETPROP ${dstResetProp.absolutePath} && chmod 755 ${dstResetProp.absolutePath}"
-
-            val rRP = execWithIO(cmdRP, useBusybox = false, hideStderr = false)
-            if (!rRP.isSuccess()) {
-                Log.e(TAG, "Failed to ensure resetprop: ${rRP.err}")
-                return@withContext false
+            if (!fs.exists(dstResetProp)) {
+                java.io.FileInputStream(RESETPROP).use { inputStream ->
+                    if (copyStream(inputStream, fs, dstResetProp)) {
+                        execWithIO("chmod 755 \"$dstResetProp\"", useBusybox = false)
+                    }
+                }
             }
 
             true

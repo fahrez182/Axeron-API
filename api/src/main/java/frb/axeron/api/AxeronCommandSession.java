@@ -44,10 +44,10 @@ public class AxeronCommandSession {
             execCmd =
                     "export PARENT_PID=$$; " +
                             "echo $PARENT_PID 1>&2; " +
-                            "exec -a \"QuickShell\" sh -c \"$0\"";
+                            "exec -a \"QuickShell\" /system/bin/sh -c \"$0\"";
         } else {
             execCmd =
-                    "exec -a \"QuickShell\" sh -c \"$0\"";
+                    "exec -a \"QuickShell\" /system/bin/sh -c \"$0\"";
         }
 
         if (useBusybox) {
@@ -62,7 +62,7 @@ public class AxeronCommandSession {
         } else {
             return new String[]{
                     "setsid",
-                    "sh",
+                    "/system/bin/sh",
                     "-c",
                     execCmd,
                     cmd
@@ -161,14 +161,34 @@ public class AxeronCommandSession {
                     Log.d("CmdOut", "isProcess: " + isProcessRunning.get());
 
                     // Jika bukan PID, teruskan ke error handler
-                    if (!isProcessRunning.get() && finalLine.trim().matches("^\\d+$")) {
-                        pid.set(Integer.parseInt(finalLine.trim()));
-                        Log.d("CmdOut", "pid: " + pid.get());
-                        isProcessRunning.set(true);
-                        if (processListener != null) {
-                            mainHandler.post(() -> processListener.onProcessCreated(pid.get(), command));
+                    if (!isProcessRunning.get()) {
+                        String[] lines = finalLine.split("\\R");
+                        StringBuilder otherOutput = new StringBuilder();
+                        boolean pidFound = false;
+                        for (String line : lines) {
+                            String trimmed = line.trim();
+                            if (!pidFound && trimmed.matches("^\\d+$")) {
+                                pid.set(Integer.parseInt(trimmed));
+                                Log.d("CmdOut", "pid: " + pid.get());
+                                isProcessRunning.set(true);
+                                if (processListener != null) {
+                                    mainHandler.post(() -> processListener.onProcessCreated(pid.get(), command));
+                                }
+                                pidFound = true;
+                            } else {
+                                if (otherOutput.length() > 0) otherOutput.append("\n");
+                                otherOutput.append(line);
+                            }
                         }
-                        continue;
+                        if (pidFound) {
+                            if (otherOutput.length() > 0) {
+                                String remaining = otherOutput.toString();
+                                if (resultListener != null) {
+                                    mainHandler.post(() -> resultListener.onError(remaining));
+                                }
+                            }
+                            continue;
+                        }
                     }
 
                     if (isProcessRunning.get() && resultListener != null) {
