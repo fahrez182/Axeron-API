@@ -351,7 +351,7 @@ public class Axeron {
     };
 
     public static AxeronNewProcess newProcess(@NonNull String cmd) {
-        return newProcess(new String[]{"sh", "-c", cmd});
+        return newProcess(new String[]{"/system/bin/sh", "-c", cmd});
     }
 
     public static AxeronNewProcess newProcess(@NonNull String[] cmd) {
