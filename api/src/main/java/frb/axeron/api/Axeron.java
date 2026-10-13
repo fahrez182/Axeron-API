@@ -437,6 +437,14 @@ public class Axeron {
         }
     }
 
+    public static void setPreferSystemBinaries(boolean prefer) {
+        try {
+            requireService().setPreferSystemBinaries(prefer);
+        } catch (RemoteException | IllegalStateException e) {
+            Log.e(TAG, "setPreferSystemBinaries", e);
+        }
+    }
+
     private static RuntimeException rethrowAsRuntimeException(String message, RemoteException e) {
         return new RuntimeException(message, e);
     }

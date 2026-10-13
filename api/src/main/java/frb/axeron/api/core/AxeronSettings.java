@@ -33,6 +33,7 @@ public class AxeronSettings {
     public static final String ENABLE_IGNITE_RELOG = "enable_ignite_relog";
     public static final String LANGUAGE = "language";
     public static final String ENABLE_START_ON_BOOT = "enable_start_on_boot";
+    public static final String PREFER_SYSTEM_BINARIES = "prefer_system_binaries";
 
     private static SharedPreferences sPreferences;
 
@@ -177,6 +178,16 @@ public class AxeronSettings {
 
     public static void removePrimaryColor() {
         getPreferences().edit().remove(CUSTOM_PRIMARY_COLOR).apply();
+    }
+
+    // PATH PRIORITY
+
+    public static boolean getPreferSystemBinaries() {
+        return getPreferences().getBoolean(PREFER_SYSTEM_BINARIES, false);
+    }
+
+    public static void setPreferSystemBinaries(boolean prefer) {
+        getPreferences().edit().putBoolean(PREFER_SYSTEM_BINARIES, prefer).apply();
     }
 
     public static Locale getLocale() {
