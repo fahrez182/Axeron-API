@@ -314,7 +314,7 @@ abstract class Service<UserServiceMgr : UserServiceManager,
         }
 
         val entry: ConfigPackageEntry? = configManager.find(callingUid)
-        return entry != null && entry.isAllowed
+        return entry != null && entry.isDenied
     }
 
     private var firstInitFlag = true

@@ -248,6 +248,7 @@ public class Axeron {
             }
             binder = newBinder;
             service = IAxeronService.Stub.asInterface(newBinder);
+            axeronInfo = null;
 
             try {
                 binder.linkToDeath(DEATH_RECIPIENT, 0);
@@ -260,6 +261,8 @@ public class Axeron {
                 Log.i("ShizukuApplication", "attachApplication");
             } catch (Throwable e) {
                 Log.w("ShizukuApplication", Log.getStackTraceString(e));
+                // Fallback: trigger listeners even if attach failed so apps aren't stuck
+                scheduleBinderReceivedListeners();
             }
 
         }
