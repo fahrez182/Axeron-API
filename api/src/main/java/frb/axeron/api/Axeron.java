@@ -445,6 +445,15 @@ public class Axeron {
         }
     }
 
+    public static int[] getFlagsForUids(@NonNull int[] uids, int mask) {
+        try {
+            return requireService().getFlagsForUids(uids, mask);
+        } catch (RemoteException | IllegalStateException e) {
+            Log.e(TAG, "getFlagsForUids", e);
+            return new int[uids.length];
+        }
+    }
+
     private static RuntimeException rethrowAsRuntimeException(String message, RemoteException e) {
         return new RuntimeException(message, e);
     }

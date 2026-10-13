@@ -39,5 +39,6 @@ interface IAxeronService {
     void updateFlagsForUid(int uid, int mask, int value) = 106;
     int checkPermission(String permission) = 107;
     void setPreferSystemBinaries(boolean prefer) = 108;
+    int[] getFlagsForUids(in int[] uids, int mask) = 109;
     void exit() = 16777114;
 }

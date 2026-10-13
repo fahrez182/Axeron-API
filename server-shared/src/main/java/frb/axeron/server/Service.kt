@@ -174,13 +174,14 @@ abstract class Service<UserServiceMgr : UserServiceManager,
             newData.appendFrom(data, data.dataPosition(), data.dataAvail())
         } catch (tr: Throwable) {
             LOGGER.w(tr, "appendFrom")
+            newData.recycle()
             return
         }
+        val id = clearCallingIdentity()
         try {
-            val id = clearCallingIdentity()
             targetBinder.transact(targetCode, newData, reply, targetFlags)
-            restoreCallingIdentity(id)
         } finally {
+            restoreCallingIdentity(id)
             newData.recycle()
         }
     }
