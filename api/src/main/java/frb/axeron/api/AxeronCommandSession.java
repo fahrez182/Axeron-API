@@ -14,8 +14,13 @@ import java.io.OutputStreamWriter;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class AxeronCommandSession {
+    private static final Pattern PID_LINE = Pattern.compile("(?m)^[ \\t]*(\\d+)[ \\t]*(?:\\r?\\n|$)");
+    private final Object startLock = new Object();
+    private final StringBuilder earlyOutput = new StringBuilder();
     private final AtomicBoolean isProcessRunning = new AtomicBoolean(false);
     private final AtomicInteger pid = new AtomicInteger(-1);
     private final AtomicInteger exitCode = new AtomicInteger(-1);
@@ -132,6 +137,10 @@ public class AxeronCommandSession {
         bufferedReader = new BufferedReader(new InputStreamReader(process.getInputStream()));
         bufferedError = new BufferedReader(new InputStreamReader(process.getErrorStream()));
 
+        synchronized (startLock) {
+            earlyOutput.setLength(0);
+        }
+
         outThread = new Thread(() -> {
             try {
                 char[] buffer = new char[1024 * 8];
@@ -140,9 +149,17 @@ public class AxeronCommandSession {
                 while ((bytesRead = bufferedReader.read(buffer)) != -1) {
                     String part = new String(buffer, 0, bytesRead);
 
-                    if (isProcessRunning.get() && resultListener != null) {
-                        lastOutput.set(part);
-                        outputHandler.post(() -> resultListener.output(part));
+                    synchronized (startLock) {
+                        // stdout can be read before stderr delivered the pid; hold it so it
+                        // isn't lost and still lands after onProcessCreated.
+                        if (!isProcessRunning.get()) {
+                            earlyOutput.append(part);
+                            continue;
+                        }
+                        if (resultListener != null) {
+                            lastOutput.set(part);
+                            outputHandler.post(() -> resultListener.output(part));
+                        }
                     }
                 }
             } catch (IOException | NullPointerException e) {
@@ -160,32 +177,28 @@ public class AxeronCommandSession {
                     Log.d("CmdOut", "error: " + finalLine);
                     Log.d("CmdOut", "isProcess: " + isProcessRunning.get());
 
-                    // Jika bukan PID, teruskan ke error handler
+                    // The wrapper echoes its pid to stderr first; cut exactly that line and
+                    // keep everything else byte-for-byte (newlines included).
                     if (!isProcessRunning.get()) {
-                        String[] lines = finalLine.split("\\R");
-                        StringBuilder otherOutput = new StringBuilder();
-                        boolean pidFound = false;
-                        for (String line : lines) {
-                            String trimmed = line.trim();
-                            if (!pidFound && trimmed.matches("^\\d+$")) {
-                                pid.set(Integer.parseInt(trimmed));
-                                Log.d("CmdOut", "pid: " + pid.get());
+                        Matcher m = PID_LINE.matcher(finalLine);
+                        if (m.find()) {
+                            pid.set(Integer.parseInt(m.group(1)));
+                            Log.d("CmdOut", "pid: " + pid.get());
+                            String remaining = finalLine.substring(0, m.start()) + finalLine.substring(m.end());
+                            synchronized (startLock) {
                                 isProcessRunning.set(true);
                                 if (processListener != null) {
                                     mainHandler.post(() -> processListener.onProcessCreated(pid.get(), command));
                                 }
-                                pidFound = true;
-                            } else {
-                                if (otherOutput.length() > 0) otherOutput.append("\n");
-                                otherOutput.append(line);
-                            }
-                        }
-                        if (pidFound) {
-                            if (otherOutput.length() > 0) {
-                                String remaining = otherOutput.toString();
-                                if (resultListener != null) {
-                                    mainHandler.post(() -> resultListener.onError(remaining));
+                                if (earlyOutput.length() > 0 && resultListener != null) {
+                                    String early = earlyOutput.toString();
+                                    earlyOutput.setLength(0);
+                                    lastOutput.set(early);
+                                    outputHandler.post(() -> resultListener.output(early));
                                 }
+                            }
+                            if (!remaining.isEmpty() && resultListener != null) {
+                                mainHandler.post(() -> resultListener.onError(remaining));
                             }
                             continue;
                         }

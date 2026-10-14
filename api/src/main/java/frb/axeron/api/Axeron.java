@@ -232,7 +232,15 @@ public class Axeron {
     }
 
     public static void onBinderReceived(IBinder newBinder, String packageName) {
-        if (binder == newBinder) return;
+        if (binder == newBinder) {
+            // Server re-pushed the same binder: its state changed (e.g. runtime permission),
+            // so drop the cached info and let listeners re-read it.
+            if (newBinder != null) {
+                axeronInfo = null;
+                scheduleBinderReceivedListeners();
+            }
+            return;
+        }
 
         if (newBinder == null) {
             binder = null;

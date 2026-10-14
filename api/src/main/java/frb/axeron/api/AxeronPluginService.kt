@@ -25,6 +25,8 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.InputStream
+import java.io.InputStreamReader
 import java.util.concurrent.CompletableFuture
 
 
@@ -210,6 +212,21 @@ object AxeronPluginService {
         }
     }
 
+    /**
+     * Streams [stream] as text chunks. Chunks are raw stream output: they can split or join
+     * lines, so callers must not treat one as a line. The reader keeps UTF-8 decoding state,
+     * so a multibyte character split across reads stays intact.
+     */
+    private inline fun readChunks(stream: InputStream, onChunk: (String) -> Unit) {
+        val reader = InputStreamReader(stream, Charsets.UTF_8)
+        val buf = CharArray(4096)
+        while (true) {
+            val len = reader.read(buf)
+            if (len < 0) break
+            if (len > 0) onChunk(String(buf, 0, len))
+        }
+    }
+
     suspend fun execWithIO(
         cmd: String,
         onStdout: (String) -> Unit = {},
@@ -245,28 +262,14 @@ object AxeronPluginService {
         coroutineScope {
 
             val jobStdout = async(Dispatchers.IO) {
-                val buf = ByteArray(4096)
-                val stream = process.inputStream
-
-                while (true) {
-                    val len = stream.read(buf)
-                    if (len <= 0) break
-                    val chunk = String(buf, 0, len)
-
+                readChunks(process.inputStream) { chunk ->
                     synchronized(builderOut) { builderOut.append(chunk) }
                     onStdout(chunk)
                 }
             }
 
             val jobStderr = async(Dispatchers.IO) {
-                val buf = ByteArray(4096)
-                val stream = process.errorStream
-
-                while (true) {
-                    val len = stream.read(buf)
-                    if (len <= 0) break
-                    val chunk = String(buf, 0, len)
-
+                readChunks(process.errorStream) { chunk ->
                     synchronized(builderErr) { builderErr.append(chunk) }
                     onStderr(chunk)
                 }
@@ -330,28 +333,14 @@ object AxeronPluginService {
                 supervisorScope {
 
                     val jobOut = async(Dispatchers.IO) {
-                        val buf = ByteArray(4096)
-                        val s = process.inputStream
-
-                        while (true) {
-                            val len = s.read(buf)
-                            if (len <= 0) break
-
-                            val chunk = String(buf, 0, len)
+                        readChunks(process.inputStream) { chunk ->
                             synchronized(builderOut) { builderOut.append(chunk) }
                             onStdout(chunk)
                         }
                     }
 
                     val jobErr = async(Dispatchers.IO) {
-                        val buf = ByteArray(4096)
-                        val s = process.errorStream
-
-                        while (true) {
-                            val len = s.read(buf)
-                            if (len <= 0) break
-
-                            val chunk = String(buf, 0, len)
+                        readChunks(process.errorStream) { chunk ->
                             synchronized(builderErr) { builderErr.append(chunk) }
                             onStderr(chunk)
                         }
@@ -524,10 +513,11 @@ object AxeronPluginService {
         val stdout = StringBuilder()
         val stderr = StringBuilder()
 
+        // Callbacks get stream text like execWithIO, so each line keeps its newline.
         val outJob = launch {
             process.inputStream.bufferedReader().useLines {
                 it.forEach { line ->
-                    onStdout(line)
+                    onStdout(line + "\n")
                     stdout.appendLine(line)
                 }
             }
@@ -536,7 +526,7 @@ object AxeronPluginService {
         val errJob = launch {
             process.errorStream.bufferedReader().useLines {
                 it.forEach { line ->
-                    onStderr(line)
+                    onStderr(line + "\n")
                     stderr.appendLine(line)
                 }
             }
@@ -660,7 +650,7 @@ object AxeronPluginService {
     }
 
     private suspend fun copyStream(
-        inputStream: java.io.InputStream,
+        inputStream: InputStream,
         fs: AxeronFileService,
         dstPath: String
     ): Boolean = withContext(Dispatchers.IO) {
