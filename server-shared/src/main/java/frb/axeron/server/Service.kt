@@ -1,6 +1,7 @@
 package frb.axeron.server
 
 import android.content.pm.PackageInfo
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
@@ -527,6 +528,9 @@ abstract class Service<UserServiceMgr : UserServiceManager,
     @Throws(RemoteException::class)
     override fun checkPermission(permission: String?): Int {
         enforceCallingPermission("checkPermission")
+        // Root holds every permission, but uid 0 owns no package, so the permission manager
+        // answers DENIED (e.g. GRANT_RUNTIME_PERMISSIONS, which then asks for an extra step).
+        if (Os.getuid() == 0) return PackageManager.PERMISSION_GRANTED
         return PermissionManagerApis.checkPermission(permission, Os.getuid())
     }
 }
