@@ -40,5 +40,7 @@ interface IAxeronService {
     int checkPermission(String permission) = 107;
     void setPreferSystemBinaries(boolean prefer) = 108;
     int[] getFlagsForUids(in int[] uids, int mask) = 109;
+    void setWakeLock(boolean enabled) = 110;
+    boolean isWakeLockHeld() = 111;
     void exit() = 16777114;
 }

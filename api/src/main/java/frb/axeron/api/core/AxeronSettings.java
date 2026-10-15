@@ -34,6 +34,7 @@ public class AxeronSettings {
     public static final String LANGUAGE = "language";
     public static final String ENABLE_START_ON_BOOT = "enable_start_on_boot";
     public static final String PREFER_SYSTEM_BINARIES = "prefer_system_binaries";
+    public static final String WAKE_LOCK = "wake_lock";
 
     private static SharedPreferences sPreferences;
 
@@ -188,6 +189,17 @@ public class AxeronSettings {
 
     public static void setPreferSystemBinaries(boolean prefer) {
         getPreferences().edit().putBoolean(PREFER_SYSTEM_BINARIES, prefer).apply();
+    }
+
+    // WAKELOCK: the server holds it from start; the manager re-applies this on connect, so
+    // "off" survives restarts. Defaults to on, the server's behaviour before it was a switch.
+
+    public static boolean getWakeLock() {
+        return getPreferences().getBoolean(WAKE_LOCK, true);
+    }
+
+    public static void setWakeLock(boolean enabled) {
+        getPreferences().edit().putBoolean(WAKE_LOCK, enabled).apply();
     }
 
     public static Locale getLocale() {

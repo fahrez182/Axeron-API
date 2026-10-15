@@ -453,6 +453,28 @@ public class Axeron {
         }
     }
 
+    /**
+     * Holds (or releases) a partial wakelock in the server, keeping the CPU awake for long
+     * running work while the screen is off. Lasts until released or the server stops.
+     */
+    public static void setWakeLock(boolean enabled) {
+        try {
+            requireService().setWakeLock(enabled);
+        } catch (RemoteException | IllegalStateException e) {
+            Log.e(TAG, "setWakeLock", e);
+        }
+    }
+
+    /** False as well when the server can't be reached. */
+    public static boolean isWakeLockHeld() {
+        try {
+            return requireService().isWakeLockHeld();
+        } catch (RemoteException | IllegalStateException e) {
+            Log.e(TAG, "isWakeLockHeld", e);
+            return false;
+        }
+    }
+
     public static int[] getFlagsForUids(@NonNull int[] uids, int mask) {
         try {
             return requireService().getFlagsForUids(uids, mask);
