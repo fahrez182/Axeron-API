@@ -13,13 +13,12 @@ int connect_server();
 int connect_broker();
 
 // Starts AxshBootstrap in app_process from the APK this binary was installed with, connected to
-// us by a socketpair, and returns our end. It speaks the broker protocol. -1 on failure, e.g.
+// us by a socketpair, and returns our end. It speaks the same protocol. -1 on failure, e.g.
 // when this binary was copied out of an APK's lib directory.
 int spawn_bootstrap();
 
-// Reads the one-byte reply status together with any fds sent alongside it (SCM_RIGHTS).
-// fds[0..nfds) are set to -1 where nothing arrived. Returns false on EOF or error.
-bool recv_status(int fd, uint8_t* status, int* fds, size_t nfds);
+// Writes all of data, with fds[0..nfds) attached to its first byte as SCM_RIGHTS.
+bool write_with_fds(int fd, const void* data, size_t len, const int* fds, size_t nfds);
 
 // Full-write / full-read helpers. Return false on EOF or error.
 bool write_all(int fd, const void* data, size_t len);

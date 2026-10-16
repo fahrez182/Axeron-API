@@ -1,11 +1,39 @@
-package rikka.rish;
+package frb.axeron.axsh.host;
 
+import android.annotation.SuppressLint;
 import android.os.ParcelFileDescriptor;
+import android.system.ErrnoException;
+import android.system.Os;
+import android.system.OsConstants;
 import android.util.Log;
 
-public class RishHost {
+/**
+ * Server side of one remote shell, forked on the client's fds. With a PTY it copies between the
+ * PTY and the client's pipes; without one the pipes are the shell's stdio and nothing is copied.
+ * Natives live in libaxsh_host.so ({@link #loadLibrary}). Started from rish's RishHost.
+ */
+public class PtyHost {
 
-    private static final String TAG = "RishHost";
+    private static final String TAG = "PtyHost";
+
+    private static String libraryPath;
+
+    /** Where libaxsh_host.so is; null to look it up by name. Set before {@link #loadLibrary}. */
+    public static void setLibraryPath(String path) {
+        libraryPath = path;
+    }
+
+    @SuppressLint("UnsafeDynamicallyLoadedCode")
+    public static void loadLibrary() {
+        if (libraryPath == null) {
+            System.loadLibrary("axsh_host");
+        } else {
+            System.load(libraryPath + "/libaxsh_host.so");
+        }
+    }
+
+    /** tty flag: stdin, stdout and stderr all on the PTY. */
+    public static final byte TTY_ALL = (1) | (1 << 1) | (1 << 2);
 
     // libcore/ojluni/src/main/java/java/lang/ProcessImpl.java
     private final String[] args;
@@ -17,8 +45,9 @@ public class RishHost {
     private final int stderr;
     private int pid;
     private int ptmx;
-    private int exitCode = Integer.MAX_VALUE;
-    public RishHost(
+    private volatile int exitCode = Integer.MAX_VALUE;
+    private Thread waiter;
+    public PtyHost(
             String[] args, String[] env, String dir,
             byte tty,
             ParcelFileDescriptor stdin, ParcelFileDescriptor stdout, ParcelFileDescriptor stderr) {
@@ -104,20 +133,39 @@ public class RishHost {
         pid = result[0];
         ptmx = result[1];
 
-        new Thread(() -> exitCode = waitFor(pid)).start();
+        waiter = new Thread(() -> exitCode = waitFor(pid), "pty-host-wait-" + pid);
+        waiter.start();
     }
 
     public int getPid() {
         return pid;
     }
 
+    /** The exit code, or Integer.MAX_VALUE while the shell still runs. */
     public int getExitCode() {
         return exitCode;
     }
 
+    /** Blocks until the shell exits, then returns its exit code. */
+    public int waitForExit() throws InterruptedException {
+        waiter.join();
+        return exitCode;
+    }
+
+    /** Kills the shell's whole session (it called setsid, so its pid is the group id). */
+    public void destroy() {
+        if (pid <= 0) return;
+        try {
+            Os.kill(-pid, OsConstants.SIGKILL);
+        } catch (ErrnoException e) {
+            Log.d(TAG, "kill " + pid + ": " + e.getMessage());
+        }
+    }
+
+    /** No-op without a PTY (ptmx is -1 then). */
     public void setWindowSize(long size) {
         Log.d(TAG, "setWindowSize");
 
-        setWindowSize(ptmx, size);
+        if (ptmx >= 0) setWindowSize(ptmx, size);
     }
 }

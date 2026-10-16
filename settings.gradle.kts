@@ -26,7 +26,6 @@ include(":aidl")
 include(":shared")
 include(":provider")
 include(":server-shared")
-include(":rish")
 include(":demo-axsh")
 include(":axsh")
  

@@ -66,6 +66,9 @@ static jintArray RishHost_startHost(
     bool in_tty = tty & ATTY_IN;
     bool out_tty = tty & ATTY_OUT;
     bool err_tty = tty & ATTY_ERR;
+    // Without a PTY the client's pipes become the shell's stdio as they are: nothing is copied
+    // here, and once we drop our copies the client sees EOF when the shell is done (and vice versa).
+    bool direct = tty == 0;
 
     LOGD("[START] RishHost_startHost");
     LOGD("[MODE ] tty=0x%02x in_tty=%d out_tty=%d err_tty=%d",
@@ -93,25 +96,25 @@ static jintArray RishHost_startHost(
          (tty & ATTY_OUT) ? 1 : 0,
          (tty & ATTY_ERR) ? 1 : 0);
 
-    if (!in_tty) {
+    if (!in_tty && !direct) {
         pipe2(stdin_pipe, 0);
         LOGD("[PIPE ] stdin_pipe r=%d w=%d", stdin_pipe[0], stdin_pipe[1]); // [LOG+]
     }
-    if (!out_tty) {
+    if (!out_tty && !direct) {
         pipe2(stdout_pipe, 0);
         LOGD("[PIPE ] stdout_pipe r=%d w=%d", stdout_pipe[0], stdout_pipe[1]); // [LOG+]
     }
-    if (!err_tty) {
+    if (!err_tty && !direct) {
         pipe2(stderr_pipe, 0);
         LOGD("[PIPE ] stderr_pipe r=%d w=%d", stderr_pipe[0], stderr_pipe[1]); // [LOG+]
     }
 
+    // The full argv, program first: argv[0] is what gets exec'd.
     const char *pargBlock = getBytes(env, argBlock);
-    const char **argv = NEW(const char *, argc + 2);
-    argv[0] = "/system/bin/sh";
-    initVectorFromBlock(argv + 1, pargBlock, argc);
+    const char **argv = NEW(const char *, argc + 1);
+    initVectorFromBlock(argv, pargBlock, argc);
 
-    for (int i = 0; i < argc + 2; ++i) {
+    for (int i = 0; i < argc; ++i) {
         LOGD("[ARGV ] arg%d=%s", i, argv[i]);
     }
 
@@ -152,6 +155,18 @@ static jintArray RishHost_startHost(
         releaseBytes(env, envBlock, penvBlock);
         releaseBytes(env, dirBlock, pdir);
         LOGD("[PARENT] pid=%d", pid); // [LOG+]
+
+        if (direct) {
+            // The child has them; ours would keep the client from ever seeing EOF.
+            LOGD("[PARENT] direct: client pipes are the child's stdio");
+            close(stdin_read);
+            close(stdout_write);
+            if (stderr_write >= 0) close(stderr_write);
+            auto result = env->NewIntArray(2);
+            env->SetIntArrayRegion(result, 0, 1, &pid);
+            env->SetIntArrayRegion(result, 1, 1, &ptmx);
+            return result;
+        }
 
         auto called = std::make_shared<std::atomic_bool>(false);
         auto func = [pid, called]() {
@@ -233,7 +248,16 @@ static jintArray RishHost_startHost(
             LOGD("[CHILD ] no PTY, pipe mode");
         }
 
-        if (in_tty) {
+        if (direct) {
+            dup2(stdin_read, STDIN_FILENO);
+            dup2(stdout_write, STDOUT_FILENO);
+            dup2(stderr_write >= 0 ? stderr_write : stdout_write, STDERR_FILENO);
+            const int client_fds[] = {stdin_read, stdout_write, stderr_write};
+            for (int fd : client_fds) {
+                if (fd > STDERR_FILENO) close(fd);
+            }
+            LOGD("[CHILD ] stdio <- client pipes");
+        } else if (in_tty) {
             dup2(pts, STDIN_FILENO);
             LOGD("[CHILD ] stdin <- pts");
         } else {
@@ -242,7 +266,9 @@ static jintArray RishHost_startHost(
             LOGD("[CHILD ] stdin <- pipe");
         }
 
-        if (out_tty) {
+        if (direct) {
+            // stdout and stderr were set above.
+        } else if (out_tty) {
             dup2(pts, STDOUT_FILENO);
             LOGD("[CHILD ] stdout <- pts");
         } else {
@@ -251,7 +277,9 @@ static jintArray RishHost_startHost(
             LOGD("[CHILD ] stdout <- pipe");
         }
 
-        if (err_tty) {
+        if (direct) {
+            // As above.
+        } else if (err_tty) {
             dup2(pts, STDERR_FILENO);
             LOGD("[CHILD ] stderr <- pts");
         } else {
@@ -269,20 +297,15 @@ static jintArray RishHost_startHost(
             close(pts);
         }
 
-        LOGD("[EXEC ] exec /system/bin/sh"); // [LOG+]
+        LOGD("[EXEC ] exec %s", argv[0]); // [LOG+]
 
         if (envv) {
-            if (execvpe("/system/bin/sh", (char *const *) argv, (char *const *) envv) == -1) {
-                PLOGE("execv");
-                exit(1);
-            }
+            execvpe(argv[0], (char *const *) argv, (char *const *) envv);
         } else {
-            if (execvp("/system/bin/sh", (char *const *) argv) == -1) {
-                PLOGE("execv");
-                exit(1);
-            }
+            execvp(argv[0], (char *const *) argv);
         }
-        exit(0);
+        PLOGE("execv");
+        _exit(127);
     }
 }
 
@@ -319,12 +342,20 @@ static jint RishHost_waitFor(JNIEnv *env, jclass clazz, jint pid) {
     return -1;
 }
 
-int rikka_rish_RishHost_registerNatives(JNIEnv *env) {
-    auto clazz = env->FindClass("rikka/rish/RishHost");
+// libaxsh_host.so: loaded only by the server, which hosts the remote shells (PTY or pipes).
+JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
+    JNIEnv *env = nullptr;
+    if (vm->GetEnv((void **) &env, JNI_VERSION_1_6) != JNI_OK) return -1;
+
+    auto clazz = env->FindClass("frb/axeron/axsh/host/PtyHost");
+    if (clazz == nullptr) return JNI_ERR;
     JNINativeMethod methods[] = {
             {"start",         "([BI[BI[BBIII)[I", (void *) RishHost_startHost},
             {"setWindowSize", "(IJ)V",            (void *) RishHost_setWindowSize},
             {"waitFor",       "(I)I",             (void *) RishHost_waitFor},
     };
-    return env->RegisterNatives(clazz, methods, sizeof(methods) / sizeof(methods[0]));
+    if (env->RegisterNatives(clazz, methods, sizeof(methods) / sizeof(methods[0])) != JNI_OK) {
+        return JNI_ERR;
+    }
+    return JNI_VERSION_1_6;
 }

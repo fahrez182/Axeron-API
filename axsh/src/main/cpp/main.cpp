@@ -7,10 +7,15 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fcntl.h>
 #include <poll.h>
 #include <pthread.h>
+#include <sys/ioctl.h>
 #include <sys/socket.h>
+#include <termios.h>
 #include <unistd.h>
+
+extern char** environ;
 
 using namespace axsh;
 
@@ -36,32 +41,7 @@ bool start_detached(void* (*fn)(void*), int fd) {
     return true;
 }
 
-// Direct mode: our stdin goes to the server as FRAME_DATA.
-void* stdin_to_frames(void* raw) {
-    const int fd = arg_fd(raw);
-    char buf[8192];
-    for (;;) {
-        ssize_t n = ::read(STDIN_FILENO, buf, sizeof(buf));
-        if (n < 0) {
-            if (errno == EINTR) continue;
-            break;
-        }
-        if (n == 0) break;
-
-        uint8_t hdr[5];
-        hdr[0] = FRAME_DATA;
-        const uint32_t len = static_cast<uint32_t>(n);
-        std::memcpy(hdr + 1, &len, 4);
-        if (!write_all(fd, hdr, sizeof(hdr)) || !write_all(fd, buf, static_cast<size_t>(n))) {
-            break;
-        }
-    }
-    // Half-close so the server sees EOF on the remote shell's stdin.
-    ::shutdown(fd, SHUT_WR);
-    return nullptr;
-}
-
-// Broker mode: our stdin goes straight into the remote shell's stdin pipe.
+// Our stdin goes into the remote shell's stdin pipe; closing it is the shell's EOF.
 void* stdin_to_pipe(void* raw) {
     const int pipe = arg_fd(raw);
     char buf[8192];
@@ -78,12 +58,38 @@ void* stdin_to_pipe(void* raw) {
     return nullptr;
 }
 
-bool send_handshake(int fd, char** args, int count) {
+bool is_pty_env(const char* entry) {
+    const char* eq = std::strchr(entry, '=');
+    if (eq == nullptr) return false;
+    const size_t name_len = static_cast<size_t>(eq - entry);
+    for (const char* name : PTY_ENV) {
+        const size_t len = std::strlen(name);
+        const bool prefix = name[len - 1] == '_';  // "LC_"
+        if (prefix ? (name_len > len && std::strncmp(entry, name, len) == 0)
+                   : (name_len == len && std::strncmp(entry, name, len) == 0)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void window_size(uint16_t* rows, uint16_t* cols) {
+    winsize ws{};
+    if (::ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) != 0 && ::ioctl(STDIN_FILENO, TIOCGWINSZ, &ws) != 0) {
+        ws.ws_row = 0;
+        ws.ws_col = 0;
+    }
+    *rows = ws.ws_row;
+    *cols = ws.ws_col;
+}
+
+// remote: the pipe ends the server gets, PIPE_FDS or PTY_FDS of them (see axsh_protocol.h).
+bool send_handshake(int fd, char** args, int count, bool pty, const int* remote) {
     uint8_t head[6];
     std::memcpy(head, MAGIC, 4);
     head[4] = VERSION;
-    head[5] = (::isatty(STDIN_FILENO) || ::isatty(STDOUT_FILENO)) ? FLAG_PTY : 0;
-    if (!write_all(fd, head, sizeof(head))) return false;
+    head[5] = pty ? FLAG_PTY : 0;
+    if (!write_with_fds(fd, head, sizeof(head), remote, pty ? PTY_FDS : PIPE_FDS)) return false;
 
     // Remote argv is `/system/bin/sh` plus the caller's args, i.e. plain sh semantics:
     //   axsh            -> sh (interactive)
@@ -101,8 +107,21 @@ bool send_handshake(int fd, char** args, int count) {
         if (!write_arg(args[i])) return false;
     }
 
-    // No env yet: the server supplies the Axeron environment for the remote shell.
-    return write_u32(fd, 0);
+    // The server supplies the Axeron environment; a terminal only adds what describes it.
+    if (!pty) return write_u32(fd, 0);
+
+    uint32_t envc = 0;
+    for (char** e = environ; *e != nullptr; ++e) {
+        if (is_pty_env(*e)) ++envc;
+    }
+    if (!write_u32(fd, envc)) return false;
+    for (char** e = environ; *e != nullptr; ++e) {
+        if (is_pty_env(*e) && !write_arg(*e)) return false;
+    }
+
+    uint16_t size[2];
+    window_size(&size[0], &size[1]);
+    return write_all(fd, size, sizeof(size));
 }
 
 // Prints the message that follows a non-OK status.
@@ -122,17 +141,6 @@ void report_failure(int fd, uint8_t status) {
     }
 }
 
-bool read_reply(int fd) {
-    uint8_t status;
-    if (!read_all(fd, &status, 1)) {
-        std::fprintf(stderr, "axsh: no reply from server\n");
-        return false;
-    }
-    if (status == STATUS_OK) return true;
-    report_failure(fd, status);
-    return false;
-}
-
 // Reads the closing FRAME_EXIT, if any. Anything else ends the session with code 1.
 int read_exit(int fd) {
     uint8_t type;
@@ -141,53 +149,19 @@ int read_exit(int fd) {
     return 1;
 }
 
-int relay_frames(int fd) {
-    if (!start_detached(stdin_to_frames, fd)) {
+// ---- without a PTY: the pipes are the shell's own stdio ----
+
+// in: we write the shell's stdin. out, err: we read its stdout and stderr.
+int relay_pipes(int fd, int in, int out, int err) {
+    if (!start_detached(stdin_to_pipe, in)) {
         std::fprintf(stderr, "axsh: can't start stdin relay\n");
+        ::close(in);
+        ::close(out);
+        ::close(err);
         return 1;
     }
 
-    int code = 0;
-    char buf[8192];
-    for (;;) {
-        uint8_t type;
-        if (!read_all(fd, &type, 1)) break;
-
-        if (type == FRAME_DATA) {
-            uint32_t len;
-            if (!read_all(fd, &len, 4)) break;
-            uint32_t remaining = len;
-            while (remaining > 0) {
-                const size_t chunk = remaining < sizeof(buf) ? remaining : sizeof(buf);
-                if (!read_all(fd, buf, chunk)) { remaining = 0; break; }
-                if (!write_all(STDOUT_FILENO, buf, chunk)) { remaining = 0; break; }
-                remaining -= static_cast<uint32_t>(chunk);
-            }
-        } else if (type == FRAME_EXIT) {
-            int32_t c;
-            if (read_all(fd, &c, 4)) code = c;
-            break;
-        } else if (type == FRAME_WINCH) {
-            uint16_t dims[2];
-            if (!read_all(fd, dims, sizeof(dims))) break;
-        } else {
-            break;
-        }
-    }
-    return code;
-}
-
-// pipes = remote stdin, stdout, stderr. The socket stays open only to learn the exit code.
-int relay_pipes(int fd, const int pipes[BROKER_FDS]) {
-    if (!start_detached(stdin_to_pipe, pipes[0])) {
-        std::fprintf(stderr, "axsh: can't start stdin relay\n");
-        ::close(pipes[0]);
-        ::close(pipes[1]);
-        ::close(pipes[2]);
-        return 1;
-    }
-
-    pollfd polls[2] = {{pipes[1], POLLIN, 0}, {pipes[2], POLLIN, 0}};
+    pollfd polls[2] = {{out, POLLIN, 0}, {err, POLLIN, 0}};
     const int dest[2] = {STDOUT_FILENO, STDERR_FILENO};
     int open = 2;
     char buf[8192];
@@ -213,30 +187,144 @@ int relay_pipes(int fd, const int pipes[BROKER_FDS]) {
     return read_exit(fd);
 }
 
-int run_direct(int fd, char** args, int count) {
-    if (!send_handshake(fd, args, count) || !read_reply(fd)) return 126;
-    return relay_frames(fd);
+// ---- PTY: our terminal goes raw, the server's PTY does the line discipline ----
+
+termios saved_termios{};
+bool termios_saved = false;
+
+void restore_terminal() {
+    if (termios_saved) {
+        ::tcsetattr(STDIN_FILENO, TCSAFLUSH, &saved_termios);
+        termios_saved = false;
+    }
 }
 
-int run_broker(int fd, char** args, int count) {
-    if (!send_handshake(fd, args, count)) return 126;
+void restore_and_die(int sig) {
+    restore_terminal();
+    std::signal(sig, SIG_DFL);
+    ::raise(sig);
+}
+
+// Raw input: every key, ^C included, goes to the remote PTY, which handles echo and signals.
+bool make_terminal_raw() {
+    if (::tcgetattr(STDIN_FILENO, &saved_termios) != 0) return false;
+    termios raw = saved_termios;
+    ::cfmakeraw(&raw);
+    if (::tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) != 0) return false;
+    termios_saved = true;
+    std::atexit(restore_terminal);
+    const int fatal[] = {SIGHUP, SIGTERM, SIGQUIT};
+    for (int sig : fatal) std::signal(sig, restore_and_die);
+    return true;
+}
+
+// SIGWINCH only pokes this pipe; the relay loop reads the new size and sends it on.
+int winch_pipe[2] = {-1, -1};
+
+void on_winch(int) {
+    const int saved = errno;
+    const char c = 0;
+    (void) ::write(winch_pipe[1], &c, 1);
+    errno = saved;
+}
+
+void watch_window() {
+    if (::pipe2(winch_pipe, O_CLOEXEC | O_NONBLOCK) != 0) return;
+    struct sigaction sa{};
+    sa.sa_handler = on_winch;
+    sa.sa_flags = SA_RESTART;
+    ::sigaction(SIGWINCH, &sa, nullptr);
+}
+
+bool send_winch(int fd) {
+    uint8_t frame[5];
+    uint16_t size[2];
+    window_size(&size[0], &size[1]);
+    frame[0] = FRAME_WINCH;
+    std::memcpy(frame + 1, size, sizeof(size));
+    return write_all(fd, frame, sizeof(frame));
+}
+
+// in: we write the terminal's input there. out: we read its output.
+int relay_pty(int fd, int in, int out) {
+    if (!start_detached(stdin_to_pipe, in)) {
+        std::fprintf(stderr, "axsh: can't start stdin relay\n");
+        ::close(in);
+        ::close(out);
+        return 1;
+    }
+
+    pollfd polls[2] = {{out, POLLIN, 0}, {winch_pipe[0], POLLIN, 0}};
+    char buf[8192];
+    for (;;) {
+        if (::poll(polls, 2, -1) < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        if (polls[1].revents & POLLIN) {
+            char drain[16];
+            (void) ::read(winch_pipe[0], drain, sizeof(drain));
+            send_winch(fd);
+        }
+        if (polls[0].revents == 0) continue;
+        ssize_t n = ::read(out, buf, sizeof(buf));
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) break;  // the shell is gone and the server closed its end
+        write_all(STDOUT_FILENO, buf, static_cast<size_t>(n));
+    }
+    ::close(out);
+    return read_exit(fd);
+}
+
+// ---- one session, whoever serves it ----
+
+void close_pipes(int (*pipes)[2], int n) {
+    for (int i = 0; i < n; ++i) {
+        if (pipes[i][0] >= 0) ::close(pipes[i][0]);
+        if (pipes[i][1] >= 0) ::close(pipes[i][1]);
+    }
+}
+
+int run_session(int fd, char** args, int count, bool pty) {
+    // [0] stdin: the server reads [0], we write [1]. [1] stdout, [2] stderr: the server writes
+    // [1], we read [0]. A PTY merges stderr into stdout.
+    int pipes[PIPE_FDS][2] = {{-1, -1}, {-1, -1}, {-1, -1}};
+    const int n = pty ? PTY_FDS : PIPE_FDS;
+    for (int i = 0; i < n; ++i) {
+        if (::pipe2(pipes[i], O_CLOEXEC) != 0) {
+            close_pipes(pipes, n);
+            return 126;
+        }
+    }
+    if (pty) watch_window();
+
+    const int remote[PIPE_FDS] = {pipes[0][0], pipes[1][1], pipes[2][1]};
+    const bool sent = send_handshake(fd, args, count, pty, remote);
+    // The server has its own copies of these ends now, and ours would hide its EOF.
+    for (int i = 0; i < n; ++i) {
+        ::close(remote[i]);
+    }
+    pipes[0][0] = pipes[1][1] = pipes[2][1] = -1;
 
     uint8_t status;
-    int pipes[BROKER_FDS];
-    if (!recv_status(fd, &status, pipes, BROKER_FDS)) {
-        std::fprintf(stderr, "axsh: no reply from broker\n");
+    if (!sent || !read_all(fd, &status, 1)) {
+        std::fprintf(stderr, "axsh: no reply from AxManager\n");
+        close_pipes(pipes, n);
         return 126;
     }
     if (status != STATUS_OK) {
         report_failure(fd, status);
+        close_pipes(pipes, n);
         return 126;
     }
-    if (pipes[0] < 0 || pipes[1] < 0 || pipes[2] < 0) {
-        std::fprintf(stderr, "axsh: broker sent no pipes\n");
-        for (int p : pipes) if (p >= 0) ::close(p);
-        return 126;
-    }
-    return relay_pipes(fd, pipes);
+
+    if (!pty) return relay_pipes(fd, pipes[0][1], pipes[1][0], pipes[2][0]);
+
+    // Raw only once the session is up, so errors above print on a sane terminal.
+    make_terminal_raw();
+    const int code = relay_pty(fd, pipes[0][1], pipes[1][0]);
+    restore_terminal();
+    return code;
 }
 
 }  // namespace
@@ -244,25 +332,23 @@ int run_broker(int fd, char** args, int count) {
 int main(int argc, char** argv) {
     std::signal(SIGPIPE, SIG_IGN);
 
+    // An interactive terminal gets a PTY on the server; anything else gets plain pipes.
+    const bool pty = ::isatty(STDIN_FILENO) && ::isatty(STDOUT_FILENO);
+
     // Server socket first (works whenever SELinux allows it, e.g. root mode); otherwise the
     // app's own broker, which reaches the server over binder; otherwise a one-shot broker in
     // app_process from our own APK, so apps that only exec this binary (Termux) work too.
     int fd = connect_server();
-    if (fd >= 0) {
-        const int code = run_direct(fd, argv + 1, argc - 1);
-        ::close(fd);
-        return code;
-    }
-    const int server_err = errno;
-
-    fd = connect_broker();
+    const int server_err = fd < 0 ? errno : 0;
+    if (fd < 0) fd = connect_broker();
     if (fd < 0) fd = spawn_bootstrap();
     if (fd < 0) {
         std::fprintf(stderr, "axsh: AxManager server is not reachable (%s), and there is no broker to fall back on (%s)\n",
                      std::strerror(server_err), std::strerror(errno));
         return 127;
     }
-    const int code = run_broker(fd, argv + 1, argc - 1);
+
+    const int code = run_session(fd, argv + 1, argc - 1, pty);
     ::close(fd);
     return code;
 }

@@ -6,7 +6,7 @@
 #include <android/log.h>
 
 #ifndef LOG_TAG
-#define LOG_TAG    "RISH"
+#define LOG_TAG    "AxshHost"
 #endif
 
 #ifndef NO_LOG

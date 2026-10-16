@@ -23,7 +23,15 @@ add_executable(libaxsh.so
 
 target_link_libraries(libaxsh.so log cxx::cxx)
 
+# Server side: the JNI library behind PtyHost, which forks the remote shell on a PTY or pipes.
+add_library(axsh_host SHARED
+        host/pty_host.cpp host/pts.cpp)
+
+target_link_libraries(axsh_host log cxx::cxx)
+
 if (NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
     add_custom_command(TARGET libaxsh.so POST_BUILD
             COMMAND ${CMAKE_STRIP} --remove-section=.comment "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/libaxsh.so")
+    add_custom_command(TARGET axsh_host POST_BUILD
+            COMMAND ${CMAKE_STRIP} --remove-section=.comment "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/libaxsh_host.so")
 endif()

@@ -26,8 +26,7 @@ import moe.shizuku.server.IShizukuServiceConnection
 import rikka.hidden.compat.PackageManagerApis
 import rikka.hidden.compat.PermissionManagerApis
 import rikka.parcelablelist.ParcelableListSlice
-import rikka.rish.RishConfig
-import rikka.rish.RishService
+import frb.axeron.axsh.host.PtyHost
 import java.io.BufferedReader
 import java.io.File
 import java.io.FileReader
@@ -42,8 +41,6 @@ abstract class Service<UserServiceMgr : UserServiceManager,
     var userServiceManager: UserServiceMgr
     var configManager: ConfigMgr
     var clientManager: ClientMgr
-
-    var rishService: RishService
 
     val environmentManager: EnvironmentManager by lazy {
         EnvironmentManager(isRoot)
@@ -69,15 +66,10 @@ abstract class Service<UserServiceMgr : UserServiceManager,
     }
 
     init {
-        RishConfig.init(AxeronApiConstant.server.BINDER_DESCRIPTOR, 30000)
+        PtyHost.loadLibrary()
         userServiceManager = onCreateUserServiceManager()
         configManager = onCreateConfigManager()
         clientManager = onCreateClientManager()
-        rishService = object : RishService() {
-            override fun enforceCallingPermission(func: String) {
-                this@Service.enforceCallingPermission(func)
-            }
-        }
     }
 
     abstract fun checkCallerManagerPermission(
@@ -278,6 +270,13 @@ abstract class Service<UserServiceMgr : UserServiceManager,
         val entry: ConfigPackageEntry? = configManager.find(callingUid)
         if (clientRecord != null && entry != null && entry.isAllowed()) {
             clientRecord.dispatchRequestPermissionResult(requestCode, true)
+            return
+        }
+
+        // Denied in the manager: answer right away, no dialog.
+        if (entry != null && entry.isDenied()) {
+            LOGGER.i("requestPermission: uid=%d is denied", callingUid)
+            clientRecord?.dispatchRequestPermissionResult(requestCode, false)
             return
         }
 
@@ -511,15 +510,6 @@ abstract class Service<UserServiceMgr : UserServiceManager,
             args.putInt(ATTACH_APPLICATION_API_VERSION, -1)
             attachApplication(IShizukuApplication.Stub.asInterface(binder), args)
             reply!!.writeNoException()
-            return true
-        } else if (rishService.onTransact(
-                code,
-                data,
-                reply,
-                flags,
-                userServiceManager.environment
-            )
-        ) {
             return true
         }
         return super.onTransact(code, data, reply, flags)

@@ -138,36 +138,36 @@ int spawn_bootstrap() {
     return sv[0];
 }
 
-bool recv_status(int fd, uint8_t* status, int* fds, size_t nfds) {
-    for (size_t i = 0; i < nfds; ++i) fds[i] = -1;
+bool write_with_fds(int fd, const void* data, size_t len, const int* fds, size_t nfds) {
+    if (len == 0) return false;
+    if (nfds == 0) return write_all(fd, data, len);
+    if (nfds > static_cast<size_t>(PIPE_FDS)) {
+        errno = EINVAL;
+        return false;
+    }
 
-    iovec iov{status, 1};
-    alignas(cmsghdr) char control[CMSG_SPACE(sizeof(int) * BROKER_FDS)];
+    // One byte with the fds, then the rest as plain data.
+    iovec iov{const_cast<void*>(data), 1};
+    alignas(cmsghdr) char control[CMSG_SPACE(sizeof(int) * PIPE_FDS)]{};
     msghdr msg{};
     msg.msg_iov = &iov;
     msg.msg_iovlen = 1;
     msg.msg_control = control;
-    msg.msg_controllen = sizeof(control);
+    msg.msg_controllen = CMSG_SPACE(sizeof(int) * nfds);
+
+    cmsghdr* c = CMSG_FIRSTHDR(&msg);
+    c->cmsg_level = SOL_SOCKET;
+    c->cmsg_type = SCM_RIGHTS;
+    c->cmsg_len = CMSG_LEN(sizeof(int) * nfds);
+    std::memcpy(CMSG_DATA(c), fds, sizeof(int) * nfds);
 
     ssize_t n;
     do {
-        n = ::recvmsg(fd, &msg, MSG_CMSG_CLOEXEC);
+        n = ::sendmsg(fd, &msg, MSG_NOSIGNAL);
     } while (n < 0 && errno == EINTR);
     if (n != 1) return false;
 
-    for (cmsghdr* c = CMSG_FIRSTHDR(&msg); c != nullptr; c = CMSG_NXTHDR(&msg, c)) {
-        if (c->cmsg_level != SOL_SOCKET || c->cmsg_type != SCM_RIGHTS) continue;
-        const size_t count = (c->cmsg_len - CMSG_LEN(0)) / sizeof(int);
-        const int* received = reinterpret_cast<const int*>(CMSG_DATA(c));
-        for (size_t i = 0; i < count; ++i) {
-            if (i < nfds && fds[i] < 0) {
-                fds[i] = received[i];
-            } else {
-                ::close(received[i]);
-            }
-        }
-    }
-    return true;
+    return write_all(fd, static_cast<const uint8_t*>(data) + 1, len - 1);
 }
 
 bool write_all(int fd, const void* data, size_t len) {
