@@ -190,12 +190,31 @@ public class FileServiceHolder extends IFileService.Stub {
     }
 
     @Override
-    public ParcelFileDescriptor inputStreamPfd(String path) {
+    public boolean inputStreamPfd(String path, ParcelFileDescriptor outputStreamPfd) {
+        FileInputStream fis;
         try {
-            return ParcelFileDescriptor.open(f(path), ParcelFileDescriptor.MODE_READ_ONLY);
+            fis = new FileInputStream(path);
         } catch (FileNotFoundException e) {
-            return null;
+            try {
+                outputStreamPfd.close();
+            } catch (IOException ignored) {}
+            return false;
         }
+
+        new Thread(() -> {
+            try (FileInputStream in = fis;
+                 FileOutputStream out = new ParcelFileDescriptor.AutoCloseOutputStream(outputStreamPfd)) {
+                byte[] buffer = new byte[64 * 1024];
+                int len;
+                while ((len = in.read(buffer)) != -1) {
+                    out.write(buffer, 0, len);
+                }
+            } catch (IOException e) {
+                // EPIPE here just means the reader closed early.
+                LOGGER.w("inputStreamPfd: " + path, e);
+            }
+        }).start();
+        return true;
     }
 
     @Override

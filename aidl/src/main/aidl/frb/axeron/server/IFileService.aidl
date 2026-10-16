@@ -37,7 +37,10 @@ interface IFileService {
 
     // ---- Open file dgn flags PFD; ensureParents = auto-mkdir parent jika true
 //    ParcelFileDescriptor open(String path, int flags, boolean ensureParents);
-    ParcelFileDescriptor inputStreamPfd(String path);
+    // Server opens [path] and pumps it into [outputStreamPfd], the write end of a pipe the
+    // caller created. Never hand out the file's own fd: SELinux checks it on the binder hop,
+    // and apps can't read e.g. /data/adb (adb_data_file). False = can't open [path].
+    boolean inputStreamPfd(String path, in ParcelFileDescriptor outputStreamPfd);
     void outputStreamPfd(String path, in ParcelFileDescriptor inputStreamPfd, in IOutputStreamCallback callback, boolean append);
 
     // ---- Copy/Move (overwrite optional)

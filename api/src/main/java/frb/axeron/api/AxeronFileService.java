@@ -104,9 +104,26 @@ public class AxeronFileService implements Parcelable {
     }
 
     public FileInputStream setFileInputStream(String source) throws RemoteException, FileNotFoundException {
-        ParcelFileDescriptor pfd = getFS().inputStreamPfd(source);
-        if (pfd == null) throw new FileNotFoundException();
-        return new ParcelFileDescriptor.AutoCloseInputStream(pfd);
+        // Read through a pipe we own instead of the server's fd of the file: SELinux would
+        // reject that fd on the binder hop for files apps can't read (e.g. /data/adb).
+        ParcelFileDescriptor[] pipe;
+        try {
+            pipe = ParcelFileDescriptor.createPipe();
+        } catch (IOException e) {
+            throw new FileNotFoundException(e.getMessage());
+        }
+        boolean opened;
+        try {
+            opened = getFS().inputStreamPfd(source, pipe[1]);
+        } finally {
+            // The server got its own dup; ours must go or the reader never sees EOF.
+            StreamSession.closeQuietly(pipe[1]);
+        }
+        if (!opened) {
+            StreamSession.closeQuietly(pipe[0]);
+            throw new FileNotFoundException(source);
+        }
+        return new ParcelFileDescriptor.AutoCloseInputStream(pipe[0]);
     }
 
     public boolean exists(String path) {
