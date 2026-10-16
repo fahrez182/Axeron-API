@@ -23,12 +23,10 @@ dependencyResolutionManagement {
 rootProject.name = "Axeron-API"
 include(":api")
 include(":aidl")
-include(":shell")
 include(":shared")
 include(":provider")
 include(":server-shared")
 include(":rish")
-include(":axerish")
-include(":demo-axerish")
-include(":runtime")
+include(":demo-axsh")
+include(":axsh")
  
