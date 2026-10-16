@@ -19,7 +19,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.supervisorScope
@@ -63,6 +62,22 @@ object AxeronPluginService {
 
     private val axFS: AxeronFileService?
         get() = Axeron.newFileService()
+
+    /**
+     * Env var the igniter looks for to find a plugin's processes (AXERON_PLUGIN=<id>): whatever
+     * a plugin's own code starts must carry it, so disabling the plugin can stop it.
+     */
+    const val PLUGIN_MARKER = "AXERON_PLUGIN"
+
+    /**
+     * The server env, tagged with [pluginId] when a plugin's code runs in it. The env sent
+     * replaces the process env as a whole, so with no base env to add to, nothing is tagged.
+     */
+    private fun environmentFor(pluginId: String?): Environment? {
+        val base = Axeron.getEnvironment()
+        if (pluginId.isNullOrEmpty() || base == null) return base
+        return Environment(HashMap(base.envMap).apply { put(PLUGIN_MARKER, pluginId) }, base.isNewEnv)
+    }
 
     fun getUid(context: Context, packageName: String): Int? =
         try {
@@ -165,38 +180,31 @@ object AxeronPluginService {
         onStderr: (String) -> Unit
     ): FlashResult {
         val fs = axFS ?: return FlashResult(-1, "Axeron service unavailable", false)
-        val resolver = application.contentResolver
-        with(resolver.openInputStream(installer.uri)) {
-            val file =
-                File(
-                    PathHelper.getWorkingPath(ROOT_MODE, AxeronApiConstant.folder.PARENT_ZIP),
-                    "module.zip"
-                )
+        val file =
+            File(
+                PathHelper.getWorkingPath(ROOT_MODE, AxeronApiConstant.folder.PARENT_ZIP),
+                "module.zip"
+            )
 
-            val session = fs.getStreamSession(file.absolutePath, true, false)
-                ?: return FlashResult(-1, "Failed to create stream session", false)
-            val fos = session.outputStream
-
-            val buffer = ByteArray(8 * 1024)
-            var bytesRead: Int
-            while (this?.read(buffer).also {
-                    bytesRead = it ?: -1
-                } != -1) {
-                fos.write(buffer, 0, bytesRead)
-            }
-            fos.flush()
-            this?.close()
-
-            val cmd =
-                "ZIPFILE=${file.absolutePath}; . functions.sh; install_plugin ${installer.autoEnable}; exit 0"
-            val result = execWithIO(cmd, onStdout, onStderr, standAlone = true)
-
-            Log.i(TAG, "install module ${installer.uri} result: $result")
-
-            fs.delete(file.absolutePath)
-
-            return FlashResult(result)
+        val copied = withContext(Dispatchers.IO) {
+            application.contentResolver.openInputStream(installer.uri)?.use { input ->
+                copyStream(input, fs, file.absolutePath)
+            } ?: false
         }
+        if (!copied) {
+            fs.delete(file.absolutePath)
+            return FlashResult(-1, "Failed to copy module zip", false)
+        }
+
+        val cmd =
+            "ZIPFILE=${file.absolutePath}; . functions.sh; install_plugin ${installer.autoEnable}; exit 0"
+        val result = execWithIO(cmd, onStdout, onStderr, standAlone = true)
+
+        Log.i(TAG, "install module ${installer.uri} result: $result")
+
+        fs.delete(file.absolutePath)
+
+        return FlashResult(result)
     }
 
     data class ResultExec(
@@ -234,7 +242,9 @@ object AxeronPluginService {
         useSetsid: Boolean = false,
         useBusybox: Boolean = true,
         standAlone: Boolean = false,
-        hideStderr: Boolean = true
+        hideStderr: Boolean = true,
+        /** The plugin whose code this runs (action.sh, its WebUI), tagged with [PLUGIN_MARKER]. */
+        pluginId: String? = null
     ): ResultExec = runCatching {
 
         Log.d(TAG, "execWithIO: $cmd")
@@ -242,7 +252,7 @@ object AxeronPluginService {
         val process = Axeron.newProcess(
             if (useSetsid) arrayOf(BUSYBOX, "setsid", "sh")
             else arrayOf(BUSYBOX, "sh"),
-            Axeron.getEnvironment(),
+            environmentFor(pluginId),
             null
         )
 
@@ -301,7 +311,9 @@ object AxeronPluginService {
         onStderr: (String) -> Unit = {},
         useBusybox: Boolean = true,
         standAlone: Boolean = false,
-        hideStderr: Boolean = true
+        hideStderr: Boolean = true,
+        /** The plugin whose code this runs (its WebUI), tagged with [PLUGIN_MARKER]. */
+        pluginId: String? = null
     ): CompletableFuture<ResultExec> {
 
         val future = CompletableFuture<ResultExec>()
@@ -312,7 +324,7 @@ object AxeronPluginService {
 
                 val process = Axeron.newProcess(
                     arrayOf("sh"),
-                    Axeron.getEnvironment(),
+                    environmentFor(pluginId),
                     null
                 )
 
@@ -478,14 +490,10 @@ object AxeronPluginService {
             return@withContext FlashResult(-1, it.stackTraceToString(), false)
         }
 
-        // 3) hapus folder
+        // 3) hapus folder: each mode has its own AXERONDIR, so this wipes only [rootMode]'s.
         out("- Removing AXERONDIR")
-        runCatching {
-            execWithIO("rm -rf \"$axeronDir\"")
-        }.getOrElse {
-            err("!! deleteRecursively error: ${it.message}")
-            false
-        }
+        val removed = execWithIO("rm -rf \"$axeronDir\"", hideStderr = false)
+        if (!removed.isSuccess()) err("!! failed to remove $axeronDir: ${removed.err}")
 
         out("Complete")
 
@@ -542,13 +550,6 @@ object AxeronPluginService {
         ExecResult(exitCode, stdout.toString(), stderr.toString())
     }
 
-    suspend fun fsBarrier() {
-        withContext(Dispatchers.IO) {
-            // opsi minimal & portable
-            delay(10)
-        }
-    }
-
     @JvmStatic
     fun igniteService(): Boolean {
         return runBlocking(Dispatchers.IO) {
@@ -576,15 +577,11 @@ object AxeronPluginService {
                 Log.i(TAG, "First Init: Removing old bin")
                 removeScriptsAndBinaries()
                 removeLibrary()
-                fsBarrier()
             }
 
             if (ensure) {
                 if (!ensureLibrary()) return@withContext false
-                fsBarrier()
-
                 if (!ensureScriptsAndBinaries()) return@withContext false
-                fsBarrier()
             }
 
             val cmd =
@@ -654,16 +651,18 @@ object AxeronPluginService {
         fs: AxeronFileService,
         dstPath: String
     ): Boolean = withContext(Dispatchers.IO) {
-        fs.getStreamSession(dstPath, true, false)?.use { session ->
-            val outputStream = session.outputStream
+        val session = fs.getStreamSession(dstPath, true, false) ?: return@withContext false
+        session.use {
+            val outputStream = it.outputStream
             val buffer = ByteArray(64 * 1024)
             var bytesRead: Int
-            while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+            while (inputStream.read(buffer).also { read -> bytesRead = read } != -1) {
                 outputStream.write(buffer, 0, bytesRead)
             }
             outputStream.flush()
-            true
-        } ?: false
+        }
+        // close() waited for the server, so this is the real outcome of the write
+        session.isSuccessful
     }
 
     private suspend fun ensureScriptsAndBinaries(): Boolean = withContext(Dispatchers.IO) {

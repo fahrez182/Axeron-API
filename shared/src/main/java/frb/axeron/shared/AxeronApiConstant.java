@@ -16,6 +16,7 @@ public class AxeronApiConstant {
         String ROOT = "/";
         String TMP = "data/local/tmp/";
         String ADB = "data/adb/";
+        /** Old base of the root world, before it moved to {@link #ADB}; only migration reads it. */
         String ROOT_DE = "data/user_de/0/android/";
         String SHELL_DE = "data/user_de/0/com.android.shell/";
         String PARENT = "axeron/";
@@ -34,6 +35,12 @@ public class AxeronApiConstant {
         String PARENT_EXTERNAL_BINARY = PARENT + EXTERNAL_BINARY;
         String PARENT_ZIP = PARENT + ZIP;
         String PARENT_PLUGIN_UPDATE = PARENT + PLUGIN_UPDATE;
+
+        /**
+         * Flag file in {@link #PARENT}: when present, every plugin's processes are stopped once
+         * the server dies. Off (absent) by default, so plugins keep running without the server.
+         */
+        String STOP_PLUGINS_WITH_SERVER = "ax_stop_plugins_with_server";
     }
 
 

@@ -22,6 +22,9 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import frb.axeron.api.utils.Excluder;
 import frb.axeron.server.FileStat;
@@ -355,14 +358,24 @@ public class AxeronFileService implements Parcelable {
         return 0;
     }
 
+    /**
+     * Writes to [destination] through a pipe that a server thread drains into the file.
+     * {@link #close()} sends EOF and blocks until the server reports the file is fully written
+     * and synced, so the file can be chmod-ed or executed right after.
+     */
     public static class StreamSession implements AutoCloseable {
+        private static final long COMPLETION_TIMEOUT_SECONDS = 30;
+
         private final ParcelFileDescriptor inputFd;
         private final ParcelFileDescriptor outputFd;
+        private final String destination;
 
-        private final IFileService fileService;
+        private final CountDownLatch done = new CountDownLatch(1);
+        private final AtomicBoolean closed = new AtomicBoolean(false);
+        private volatile boolean success = false;
 
         public StreamSession(IFileService fileService, String destination, boolean ensureParents, boolean append) throws IOException, RemoteException {
-            this.fileService = fileService;
+            this.destination = destination;
             FileStat file = fileService.stat(destination);
             if (ensureParents) {
                 FileStat p = fileService.stat(file.parent);
@@ -377,38 +390,73 @@ public class AxeronFileService implements Parcelable {
             IOutputStreamCallback callback = new IOutputStreamCallback.Stub() {
                 @Override
                 public void onComplete() {
-                    close();
-                    Log.d("StreamSession", "Stream finished safely");
+                    success = true;
+                    done.countDown();
+                    Log.d("StreamSession", "Stream finished safely: " + destination);
                 }
 
                 @Override
                 public void onError(int errCode, String message) {
-                    close();
-                    Log.e("StreamSession", "Stream error: " + message);
+                    done.countDown();
+                    Log.e("StreamSession", "Stream error (" + errCode + "): " + destination + ": " + message);
                 }
             };
-            fileService.outputStreamPfd(destination, inputFd, callback, append);
+            try {
+                fileService.outputStreamPfd(destination, inputFd, callback, append);
+            } catch (RemoteException e) {
+                closeQuietly(inputFd);
+                closeQuietly(outputFd);
+                throw e;
+            }
         }
 
+        /** True once the server confirmed the whole stream was written and synced. */
+        public boolean isSuccessful() {
+            return success;
+        }
+
+        /** Closing the returned stream closes the session too, so it also waits for the server. */
         public FileOutputStream getOutputStream() {
-            return new FileOutputStream(outputFd.getFileDescriptor());
+            return new FileOutputStream(outputFd.getFileDescriptor()) {
+                @Override
+                public void close() throws IOException {
+                    try {
+                        super.close();
+                    } finally {
+                        StreamSession.this.close();
+                    }
+                }
+            };
         }
 
         public FileInputStream getInputStream() {
             return new FileInputStream(inputFd.getFileDescriptor());
         }
 
+        /**
+         * Closes the write end (EOF for the server) and waits for the server to finish writing.
+         * Must not run on the main thread. Safe to call more than once.
+         */
         @Override
         public void close() {
+            if (!closed.compareAndSet(false, true)) return;
+
+            closeQuietly(outputFd);
+            closeQuietly(inputFd);
+
             try {
-                if (inputFd != null) {
-                    inputFd.close();
+                if (!done.await(COMPLETION_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                    Log.e("StreamSession", "Stream not completed in " + COMPLETION_TIMEOUT_SECONDS + "s: " + destination);
                 }
-                if (outputFd != null) {
-                    fileService.fsync(outputFd);
-                    outputFd.close();
-                }
-            } catch (IOException | RemoteException ignored) {
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+
+        private static void closeQuietly(ParcelFileDescriptor pfd) {
+            try {
+                pfd.close();
+            } catch (IOException ignored) {
             }
         }
     }

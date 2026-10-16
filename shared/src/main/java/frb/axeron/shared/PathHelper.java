@@ -21,10 +21,14 @@ public class PathHelper {
         return new File(AxeronApiConstant.folder.SHELL_DE, folderName);
     }
 
+    /**
+     * Root and shell each keep their own world. Root's lives in /data/adb, where root solutions
+     * (Magisk, KernelSU, APatch) keep their data; it used to be {@link AxeronApiConstant.folder#ROOT_DE}.
+     */
     public static File getWorkingPath(boolean rootMode, String folderName) {
         if (rootMode) {
-            if (folderName == null) return new File(AxeronApiConstant.folder.ROOT_DE);
-            return new File(AxeronApiConstant.folder.ROOT_DE, folderName);
+            if (folderName == null) return new File(AxeronApiConstant.folder.ADB);
+            return new File(AxeronApiConstant.folder.ADB, folderName);
         }
         if (folderName == null) return new File(AxeronApiConstant.folder.SHELL_DE);
         return new File(AxeronApiConstant.folder.SHELL_DE, folderName);
