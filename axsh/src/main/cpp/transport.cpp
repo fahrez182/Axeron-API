@@ -104,6 +104,10 @@ int spawn_bootstrap() {
     }
 
     if (pid == 0) {
+        // Its own session: a bootstrap the user keeps alive outlives this terminal, which would
+        // otherwise hang it up along with the rest of its process group.
+        ::setsid();
+
         // dup() drops CLOEXEC, so only this end survives the exec.
         const int child_fd = ::dup(sv[1]);
         if (child_fd < 0) ::_exit(127);

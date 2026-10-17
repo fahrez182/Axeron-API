@@ -3,6 +3,7 @@ package frb.axeron.axsh
 import android.net.LocalServerSocket
 import android.net.LocalSocket
 import android.os.ParcelFileDescriptor
+import android.os.SystemClock
 import android.system.ErrnoException
 import android.system.Os
 import android.util.Log
@@ -16,6 +17,7 @@ import java.io.OutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.thread
 
 /**
@@ -122,12 +124,28 @@ class AxshSessions(private val host: Host) {
 
     /** Serves one connected client on the calling thread, until its shell is gone. */
     fun serve(socket: LocalSocket) {
+        activeCount.incrementAndGet()
         try {
             socket.use { serveSession(it) }
         } catch (e: Throwable) {
             Log.w(tag, "session failed", e)
+        } finally {
+            lastSessionEnd = SystemClock.elapsedRealtime()
+            activeCount.decrementAndGet()
         }
     }
+
+    private val activeCount = AtomicInteger(0)
+
+    @Volatile
+    private var lastSessionEnd = SystemClock.elapsedRealtime()
+
+    /** Sessions being served right now. */
+    val active: Int get() = activeCount.get()
+
+    /** How long no session has been served; 0 while one is. */
+    val idleMillis: Long
+        get() = if (active > 0) 0 else SystemClock.elapsedRealtime() - lastSessionEnd
 
     private fun serveSession(socket: LocalSocket) {
         val input = socket.inputStream

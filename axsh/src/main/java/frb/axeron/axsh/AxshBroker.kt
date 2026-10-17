@@ -75,12 +75,26 @@ object AxshBroker : AxshSessions.Host {
 
     /**
      * Serves one already-connected client on the calling thread, for [AxshBootstrap]: no
-     * listener, and the binder request goes out through [sender].
+     * listener, and the binder request goes out through [sender]. [onKeepAlive] gets the
+     * manager's [AxshKeepAlive] setting as soon as its binder reply arrives.
      */
-    internal fun serveOne(socket: LocalSocket, sender: (Intent) -> Unit) {
+    internal fun serveOne(socket: LocalSocket, sender: (Intent) -> Unit, onKeepAlive: (Int) -> Unit = {}) {
         sendRequest = sender
+        keepAliveListener = onKeepAlive
         sessions.serve(socket)
     }
+
+    /** For [AxshBootstrap] staying on: listen on this app's broker socket. False when taken. */
+    internal fun listen(): Boolean = sessions.listen(socketName())
+
+    /** Sessions running now, and how long none have (0 while some are). */
+    internal val activeSessions: Int get() = sessions.active
+
+    internal val idleMillis: Long get() = sessions.idleMillis
+
+    /** The manager's keep-alive setting, from its binder reply; for [AxshBootstrap]. */
+    @Volatile
+    private var keepAliveListener: ((Int) -> Unit)? = null
 
     // ---- AxshSessions.Host ----
 
@@ -201,6 +215,15 @@ object AxshBroker : AxshSessions.Host {
             override fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
                 if (code != 1) return super.onTransact(code, data, reply, flags)
                 received = data.readStrongBinder()
+                // Then the version code, the library dir and, from newer managers, the
+                // keep-alive setting; an older reply simply ends early.
+                var keepAlive = AxshKeepAlive.OFF
+                runCatching {
+                    data.readLong()
+                    data.readString()
+                    if (data.dataAvail() >= 4) keepAlive = data.readInt()
+                }
+                keepAliveListener?.invoke(keepAlive)
                 latch.countDown()
                 return true
             }
@@ -209,7 +232,11 @@ object AxshBroker : AxshSessions.Host {
         val intent = Intent(ACTION_REQUEST_BINDER)
             .setPackage(MANAGER_PACKAGE)
             .addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
-            .putExtra("data", Bundle().apply { putBinder("binder", receiver) })
+            .putExtra("data", Bundle().apply {
+                putBinder("binder", receiver)
+                // Which app's keep-alive setting to answer with (see AxshKeepAlive).
+                putInt(AxshKeepAlive.EXTRA_UID, Process.myUid())
+            })
         try {
             val sender = sendRequest ?: return null
             sender(intent)
