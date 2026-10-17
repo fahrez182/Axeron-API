@@ -6,8 +6,26 @@
 #include <wait.h>
 #include <android/log.h>
 #include <pthread.h>
+#include <sys/resource.h>
+#include <sys/syscall.h>
 #include "logging.h"
 #include "pts.h"
+
+/**
+ * In the child, just before exec: the shell keeps stdin, stdout and stderr and nothing else of
+ * ours. Every fd the server has open is inherited otherwise, and outlives the server in each
+ * shell still running: its @axeron listener (a restarted server can't bind it), its pipes, other
+ * sessions' PTY masters. Raw syscalls: fdsan would abort on close() of an fd a Java object owns.
+ */
+static void close_inherited_fds() {
+#ifdef __NR_close_range
+    if (syscall(__NR_close_range, 3u, ~0u, 0u) == 0) return;
+#endif
+    rlimit limit{};
+    const int max = getrlimit(RLIMIT_NOFILE, &limit) == 0 && limit.rlim_cur != RLIM_INFINITY
+                    ? static_cast<int>(limit.rlim_cur) : 4096;
+    for (int fd = 3; fd < max; ++fd) syscall(__NR_close, fd);
+}
 
 static int setWindowSize(int ptmx, jlong size) {
     static_assert(sizeof(jlong) == sizeof(winsize));
@@ -298,6 +316,8 @@ static jintArray RishHost_startHost(
         }
 
         LOGD("[EXEC ] exec %s", argv[0]); // [LOG+]
+        // Last: logging above may still use an fd of its own.
+        close_inherited_fds();
 
         if (envv) {
             execvpe(argv[0], (char *const *) argv, (char *const *) envv);
