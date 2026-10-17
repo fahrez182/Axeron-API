@@ -1,7 +1,7 @@
 package dev.frb.demo_axsh
 
 import com.topjohnwu.superuser.Shell
-import frb.axeron.axsh.Axsh
+import frb.axeron.shell.Axsh
 import java.io.File
 import kotlin.concurrent.thread
 

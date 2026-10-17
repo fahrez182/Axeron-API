@@ -21,6 +21,8 @@ android {
 dependencies {
     implementation(project(":aidl"))
     implementation(project(":shared"))
+    // Commands run through Axsh (newAxshProcess), not the legacy newProcess.
+    implementation(project(":axsh"))
 
     implementation(libs.androidx.annotation.jvm)
     implementation(libs.androidx.core.ktx)

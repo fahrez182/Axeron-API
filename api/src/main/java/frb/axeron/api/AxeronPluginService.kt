@@ -11,6 +11,7 @@ import androidx.annotation.RequiresApi
 import com.google.gson.annotations.SerializedName
 import frb.axeron.api.core.AxeronSettings
 import frb.axeron.api.core.Engine.Companion.application
+import frb.axeron.shell.Axsh
 import frb.axeron.server.Environment
 import frb.axeron.server.PluginInstaller
 import frb.axeron.shared.AxeronApiConstant
@@ -104,7 +105,7 @@ object AxeronPluginService {
     }
 
     fun allowManageExternalStorageUid(uid: Int): Int {
-        return Axeron.newProcess(
+        return Axsh.exec(
             arrayOf(
                 "sh",
                 "-c",
@@ -249,11 +250,10 @@ object AxeronPluginService {
 
         Log.d(TAG, "execWithIO: $cmd")
 
-        val process = Axeron.newProcess(
+        val process = Axsh.exec(
             if (useSetsid) arrayOf(BUSYBOX, "setsid", "sh")
             else arrayOf(BUSYBOX, "sh"),
-            environmentFor(pluginId),
-            null
+            environmentFor(pluginId)?.env
         )
 
         process.outputStream.use { os ->
@@ -322,11 +322,7 @@ object AxeronPluginService {
 
             val result = runCatching {
 
-                val process = Axeron.newProcess(
-                    arrayOf("sh"),
-                    environmentFor(pluginId),
-                    null
-                )
+                val process = Axsh.exec(arrayOf("sh"), environmentFor(pluginId)?.env)
 
                 // KIRIM COMMAND
                 process.outputStream.use { os ->
@@ -516,7 +512,7 @@ object AxeronPluginService {
         onStderr: (String) -> Unit = {}
     ): ExecResult = withContext(Dispatchers.IO) {
 
-        val process = Axeron.newProcess(cmd, env, null)
+        val process = Axsh.exec(cmd, env?.env)
 
         val stdout = StringBuilder()
         val stderr = StringBuilder()

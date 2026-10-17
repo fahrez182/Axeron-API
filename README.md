@@ -73,10 +73,12 @@ android {
 ```
 
 ```kotlin
+import frb.axeron.shell.Broker
+
 class App : Application() {
     override fun onCreate() {
         super.onCreate()
-        AxshBroker.start(this)   // listens on @axsh.<uid>, in this process
+        Broker.start(this)   // listens on @axsh.<uid>, in this process
     }
 }
 
@@ -85,7 +87,7 @@ val axsh = File(applicationInfo.nativeLibraryDir, "libaxsh.so")
 
 The broker fetches the binder once and serves every later `libaxsh.so` run of this app from the
 running process, so a command costs a socket connect and one binder call. An app that already
-holds the binder passes it: `AxshBroker.start(this) { Axeron.getBinder() }`.
+holds the binder passes it: `Broker.start(this) { Axeron.getBinder() }`.
 
 ### Either way
 
@@ -102,7 +104,7 @@ Shell.setDefaultBuilder(Shell.Builder.create().setCommands(axsh.path))
 A test bench for all of the above. Run it with AxManager's server running.
 
 - **`axsh_direct_connection`** (switch at the top, restarts the app): on, the app's own
-  `libaxsh.so` and `AxshBroker`; off, AxManager's `libaxsh.so` with no broker, as in Termux.
+  `libaxsh.so` and `Broker`; off, AxManager's `libaxsh.so` with no broker, as in Termux.
 - **Runner**: a new `axsh -c` process per command, or libsu's cached shell.
 - **Tests**:
   - connection: latency, concurrent sessions, isolation between commands;

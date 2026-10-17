@@ -8,14 +8,14 @@ namespace axsh {
 // Connects to the AxManager server. Returns a connected fd, or -1 on failure.
 int connect_server();
 
-// Connects to this app's own AxshBroker (@axsh.<uid>) and checks it runs as our uid.
+// Connects to this app's own Broker (@axsh.<uid>) and checks it runs as our uid.
 // Returns a connected fd, or -1 on failure.
 int connect_broker();
 
 // Listens on this app's broker socket (@axsh.<uid>). -1 if it can't, e.g. a broker is there.
 int listen_broker();
 
-// Starts AxshBootstrap in app_process from the APK this binary was installed with, connected to
+// Starts Bootstrap in app_process from the APK this binary was installed with, connected to
 // us by a socketpair, and returns our end. It speaks the same protocol. -1 on failure, e.g.
 // when this binary was copied out of an APK's lib directory.
 int spawn_bootstrap();

@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "frb.axeron.axsh"
+    namespace = "frb.axeron.shell"
 
     defaultConfig {
         consumerProguardFiles("consumer-rules.pro")
@@ -34,10 +34,10 @@ android {
 
 dependencies {
     implementation(libs.libcxx)
-    // AxshBroker starts the remote shell through IAxeronService.
+    // Broker starts the remote shell through IAxeronService.
     implementation(project(":aidl"))
     implementation(project(":shared"))
-    // AxshBootstrap sends the binder request from app_process, where there is no Context.
+    // Bootstrap sends the binder request from app_process, where there is no Context.
     implementation(libs.rikka.hidden.compat)
     // Its full broadcastIntent overload names hidden framework types (IIntentReceiver).
     compileOnly(libs.rikka.hidden.stub)
@@ -47,9 +47,9 @@ extra["publishLibrary"] = true
 
 // ---- libaxshboot.so: the bootstrap's own dex ----
 //
-// The native client starts AxshBootstrap in app_process. With the whole host APK as its
+// The native client starts Bootstrap in app_process. With the whole host APK as its
 // classpath that takes over a second (a 32 MB APK measured ~1.1 s, against ~0.4 s for a tiny dex),
-// so the bootstrap gets a dex of its own: R8-shrunk to what AxshBootstrap.main reaches, shipped
+// so the bootstrap gets a dex of its own: R8-shrunk to what Bootstrap.main reaches, shipped
 // as lib<abi>/libaxshboot.so next to libaxsh.so, which looks for it there. ART goes by the dex
 // magic, not the name.
 

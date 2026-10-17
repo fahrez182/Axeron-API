@@ -26,7 +26,7 @@ import moe.shizuku.server.IShizukuServiceConnection
 import rikka.hidden.compat.PackageManagerApis
 import rikka.hidden.compat.PermissionManagerApis
 import rikka.parcelablelist.ParcelableListSlice
-import frb.axeron.axsh.host.PtyHost
+import frb.axeron.shell.host.PtyHost
 import java.io.BufferedReader
 import java.io.File
 import java.io.FileReader

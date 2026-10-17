@@ -29,7 +29,7 @@ long long now_ms() {
 
 }  // namespace
 
-// The channel is our stdin; stdout and stderr are /dev/null (see AxshBootstrap.startDaemon).
+// The channel is our stdin; stdout and stderr are /dev/null (see Bootstrap.startDaemon).
 // Idle means no client passed on for that long: a session runs on in the server either way.
 int run_daemon(const char* minutes_arg) {
     const int channel = STDIN_FILENO;

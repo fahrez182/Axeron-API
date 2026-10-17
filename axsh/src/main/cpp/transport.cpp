@@ -128,7 +128,7 @@ bool find_boot_dex(const char* exe, char* out, size_t size) {
 int spawn_bootstrap() {
     // Ourselves, so the bootstrap can start us again as the daemon.
     char exe[PATH_MAX];
-    // What app_process loads AxshBootstrap from: our own dex, else (older APKs) the whole APK.
+    // What app_process loads Bootstrap from: our own dex, else (older APKs) the whole APK.
     char classpath_file[PATH_MAX];
     if (!own_exe(exe, sizeof(exe)) ||
         (!find_boot_dex(exe, classpath_file, sizeof(classpath_file)) &&

@@ -1,4 +1,4 @@
-package frb.axeron.axsh
+package frb.axeron.shell
 
 import android.net.LocalServerSocket
 import android.net.LocalSocket
@@ -22,14 +22,14 @@ import kotlin.concurrent.thread
 
 /**
  * The axsh session protocol, for every place that serves it: the server's own socket
- * (AxshServer), an app's [AxshBroker] and [AxshBootstrap]. They differ only in [Host].
+ * (AxshServer), an app's [Broker] and [Bootstrap]. They differ only in [Host].
  *
  * The client always brings its own pipes (SCM_RIGHTS on the handshake's first byte) and the
  * shell is started on them with [IAxeronService.newAxshProcess]: without a PTY they are its
  * stdio as they are, so no byte passes through here or through the server. The socket then only
  * carries FRAME_WINCH in and one FRAME_EXIT out. Wire format: `src/main/cpp/axsh_protocol.h`.
  */
-class AxshSessions(private val host: Host) {
+class Sessions(private val host: Host) {
 
     interface Host {
         /** Log tag. */
@@ -78,6 +78,21 @@ class AxshSessions(private val host: Host) {
 
         /** How long a session waits on the permission dialog before giving up. */
         const val PERMISSION_WAIT_MS = 15_000L
+
+        /** [base] with the terminal's own entries from [client] (PTY_ENV) laid over it. */
+        internal fun ptyEnvironment(base: Array<String>?, client: List<String>): Array<String> {
+            val env = LinkedHashMap<String, String>()
+            base?.forEach { entry -> env[entry.substringBefore('=')] = entry }
+            for (entry in client) {
+                val name = entry.substringBefore('=', missingDelimiterValue = "")
+                if (name in PTY_ENV || name.startsWith(PTY_ENV_PREFIX)) env[name] = entry
+            }
+            return env.values.toTypedArray()
+        }
+
+        /** struct winsize packed as IAxshProcess.setWindowSize wants it, pixels left 0. */
+        internal fun windowSize(rows: Int, cols: Int): Long =
+            (rows.toLong() and 0xffff) or ((cols.toLong() and 0xffff) shl 16)
     }
 
     private val tag get() = host.tag
@@ -283,20 +298,6 @@ class AxshSessions(private val host: Host) {
         output.flush()
     }
 
-    /** [base] with the terminal's own entries from [client] (PTY_ENV) laid over it. */
-    private fun ptyEnvironment(base: Array<String>?, client: List<String>): Array<String> {
-        val env = LinkedHashMap<String, String>()
-        base?.forEach { entry -> env[entry.substringBefore('=')] = entry }
-        for (entry in client) {
-            val name = entry.substringBefore('=', missingDelimiterValue = "")
-            if (name in PTY_ENV || name.startsWith(PTY_ENV_PREFIX)) env[name] = entry
-        }
-        return env.values.toTypedArray()
-    }
-
-    /** struct winsize packed as IAxshProcess.setWindowSize wants it, pixels left 0. */
-    private fun windowSize(rows: Int, cols: Int): Long =
-        (rows.toLong() and 0xffff) or ((cols.toLong() and 0xffff) shl 16)
 
     private fun closeAll(fds: Array<out FileDescriptor>) {
         for (fd in fds) {

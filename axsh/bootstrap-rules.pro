@@ -1,6 +1,6 @@
 # The bootstrap's own dex, libaxshboot.so (see bootstrapDex in build.gradle.kts): app_process
-# starts AxshBootstrap.main, and R8 keeps only what that reaches.
--keep class frb.axeron.axsh.AxshBootstrap {
+# starts Bootstrap.main, and R8 keeps only what that reaches.
+-keep class frb.axeron.shell.Bootstrap {
     public static void main(java.lang.String[]);
 }
 

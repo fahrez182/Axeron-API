@@ -1,4 +1,4 @@
-package frb.axeron.axsh
+package frb.axeron.shell
 
 import android.content.Context
 import android.content.Intent
@@ -22,14 +22,14 @@ import java.util.concurrent.TimeUnit
  * In-app half of `axsh` for when the server's own socket is out of reach.
  *
  * SELinux lets an app connect to its own sockets, but not to one owned by the server's domain
- * (`shell` in ADB mode). This broker listens on `@axsh.<uid>` and serves [AxshSessions] there,
+ * (`shell` in ADB mode). This broker listens on `@axsh.<uid>` and serves [Sessions] there,
  * reaching the server over binder, which checks it against this app's uid.
  *
  * The binder comes from the host when it holds one (the manager), otherwise from the manager the
  * same way axerish got it: an `AxRuntime.REQUEST_BINDER` broadcast answered by
  * `ShellBinderRequestHandler`.
  */
-object AxshBroker : AxshSessions.Host {
+object Broker : Sessions.Host {
 
     override val tag = "AxshBroker"
 
@@ -40,7 +40,7 @@ object AxshBroker : AxshSessions.Host {
 
     private const val PERMISSION_REQUEST_CODE = 0x4158
 
-    private val sessions = AxshSessions(this)
+    private val sessions = Sessions(this)
 
     /** How the binder request reaches the manager: Context in an app, ActivityManager in app_process. */
     @Volatile
@@ -76,9 +76,9 @@ object AxshBroker : AxshSessions.Host {
     fun stop() = sessions.stop()
 
     /**
-     * Serves one already-connected client on the calling thread, for [AxshBootstrap]: no
+     * Serves one already-connected client on the calling thread, for [Bootstrap]: no
      * listener, and the binder request goes out through [sender]. [onKeepAlive] gets the
-     * manager's [AxshKeepAlive] setting as soon as its binder reply arrives.
+     * manager's [KeepAlive] setting as soon as its binder reply arrives.
      */
     internal fun serveOne(socket: LocalSocket, sender: (Intent) -> Unit, onKeepAlive: (Int) -> Unit = {}) {
         sendRequest = sender
@@ -86,7 +86,7 @@ object AxshBroker : AxshSessions.Host {
         sessions.serve(socket)
     }
 
-    /** For [AxshBootstrap] staying on: listen on this app's broker socket. False when taken. */
+    /** For [Bootstrap] staying on: listen on this app's broker socket. False when taken. */
     internal fun listen(): Boolean = sessions.listen(socketName())
 
     /** Sessions running now, and how long none have (0 while some are). */
@@ -96,16 +96,16 @@ object AxshBroker : AxshSessions.Host {
 
     /**
      * A channel into the server's own axsh sessions (IAxeronService.openAxshChannel), for
-     * [AxshBootstrap] to hand to the native daemon. Null when the server is out of reach or too
+     * [Bootstrap] to hand to the native daemon. Null when the server is out of reach or too
      * old to have one; throws [SecurityException] while this app isn't allowed yet.
      */
     internal fun openChannel(): ParcelFileDescriptor? = service()?.openAxshChannel()
 
-    /** The manager's keep-alive setting, from its binder reply; for [AxshBootstrap]. */
+    /** The manager's keep-alive setting, from its binder reply; for [Bootstrap]. */
     @Volatile
     private var keepAliveListener: ((Int) -> Unit)? = null
 
-    // ---- AxshSessions.Host ----
+    // ---- Sessions.Host ----
 
     // The broker spends this app's AxManager grant, so only this app's own processes may use it.
     override fun refuse(uid: Int, pid: Int): String? =
@@ -173,14 +173,14 @@ object AxshBroker : AxshSessions.Host {
             try {
                 attach(service)
                 service.requestPermission(PERMISSION_REQUEST_CODE)
-                Log.i(tag, "permission requested, waiting up to ${AxshSessions.PERMISSION_WAIT_MS}ms")
+                Log.i(tag, "permission requested, waiting up to ${Sessions.PERMISSION_WAIT_MS}ms")
             } catch (e: Exception) {
                 Log.w(tag, "requestPermission failed", e)
                 answerPermission(false)
             }
         }
 
-        val answered = wait.latch.await(AxshSessions.PERMISSION_WAIT_MS, TimeUnit.MILLISECONDS)
+        val answered = wait.latch.await(Sessions.PERMISSION_WAIT_MS, TimeUnit.MILLISECONDS)
         if (!answered) {
             // Unanswered (dismissed or left open): the next client asks again.
             synchronized(permissionLock) {
@@ -228,7 +228,7 @@ object AxshBroker : AxshSessions.Host {
                 received = data.readStrongBinder()
                 // Then the version code, the library dir and, from newer managers, the
                 // keep-alive setting; an older reply simply ends early.
-                var keepAlive = AxshKeepAlive.OFF
+                var keepAlive = KeepAlive.OFF
                 runCatching {
                     data.readLong()
                     data.readString()
@@ -247,8 +247,8 @@ object AxshBroker : AxshSessions.Host {
             .addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
             .putExtra("data", Bundle().apply {
                 putBinder("binder", receiver)
-                // Which app's keep-alive setting to answer with (see AxshKeepAlive).
-                putInt(AxshKeepAlive.EXTRA_UID, Process.myUid())
+                // Which app's keep-alive setting to answer with (see KeepAlive).
+                putInt(KeepAlive.EXTRA_UID, Process.myUid())
             })
         try {
             val sender = sendRequest ?: return null

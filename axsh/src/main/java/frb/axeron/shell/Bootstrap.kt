@@ -1,4 +1,4 @@
-package frb.axeron.axsh
+package frb.axeron.shell
 
 import android.content.Intent
 import android.net.LocalSocket
@@ -19,15 +19,15 @@ import kotlin.system.exitProcess
  * `app_process` entry for apps that run axsh without a broker of their own (Termux executing
  * the manager's libaxsh.so, for instance). The native client starts
  *
- *     app_process -Djava.class.path=<lib dir>/libaxshboot.so /system/bin frb.axeron.axsh.AxshBootstrap <fd> <libaxsh.so> <spawn time>
+ *     app_process -Djava.class.path=<lib dir>/libaxshboot.so /system/bin frb.axeron.shell.Bootstrap <fd> <libaxsh.so> <spawn time>
  *
  * with one end of a socketpair as `<fd>`. The classpath is this class's own R8-shrunk dex (see
  * bootstrapDex in build.gradle.kts), or the whole base.apk for APKs without it, which starts
  * slower. Running as the caller's uid, this process asks the
  * manager for the server binder and serves that session over the fd, so the client sees the
- * same protocol as with an in-app [AxshBroker].
+ * same protocol as with an in-app [Broker].
  *
- * When the user turned on [AxshKeepAlive] in the manager, the app keeps a broker on
+ * When the user turned on [KeepAlive] in the manager, the app keeps a broker on
  * `@axsh.<uid>` so the next axsh runs skip app_process and the broadcast:
  *
  * - **The native daemon** (`libaxsh.so --axsh-daemon`), when the server offers a channel
@@ -38,7 +38,7 @@ import kotlin.system.exitProcess
  * Either leaves after the idle time chosen in the manager, or once AxManager was updated, so the
  * next run starts a bootstrap with the new code.
  */
-object AxshBootstrap {
+object Bootstrap {
 
     private const val TAG = "AxshBootstrap"
 
@@ -73,19 +73,19 @@ object AxshBootstrap {
 
         // Set up the broker as soon as the manager says to keep one, so a second terminal tab
         // started while this first session runs is served by it too.
-        val keptMinutes = intArrayOf(AxshKeepAlive.OFF)
+        val keptMinutes = intArrayOf(KeepAlive.OFF)
         val daemon = AtomicReference<Daemon?>(null)
         val listening = AtomicBoolean(false)
         val starter = AtomicReference<Thread?>(null)
-        AxshBroker.serveOne(socket, ::broadcast) { minutes ->
-            if (minutes == AxshKeepAlive.OFF || keptMinutes[0] != AxshKeepAlive.OFF) return@serveOne
+        Broker.serveOne(socket, ::broadcast) { minutes ->
+            if (minutes == KeepAlive.OFF || keptMinutes[0] != KeepAlive.OFF) return@serveOne
             keptMinutes[0] = minutes
             // Not on this binder thread: the channel is a call to the server, which needs the
             // binder this reply is still delivering.
             starter.set(thread(name = "axsh-daemon-start") {
                 val result = startDaemon(axsh, minutes)
                 daemon.set(result)
-                if (result == Daemon.UNSUPPORTED) listening.set(AxshBroker.listen())
+                if (result == Daemon.UNSUPPORTED) listening.set(Broker.listen())
             })
         }
         starter.get()?.join()
@@ -96,12 +96,12 @@ object AxshBootstrap {
             // Asked before the user allowed this app in this very session: try once more.
             Daemon.NOT_PERMITTED -> when (startDaemon(axsh, keptMinutes[0])) {
                 Daemon.STARTED, Daemon.NOT_PERMITTED -> exitProcess(0)
-                Daemon.UNSUPPORTED -> if (!AxshBroker.listen()) exitProcess(0)
+                Daemon.UNSUPPORTED -> if (!Broker.listen()) exitProcess(0)
             }
             Daemon.UNSUPPORTED -> if (!listening.get()) exitProcess(0) // the app has its own broker
         }
         // Without the daemon this JVM is the broker, tens of MB: no limit is for the daemon only.
-        stay(if (keptMinutes[0] == AxshKeepAlive.NEVER) AxshKeepAlive.SMART else keptMinutes[0])
+        stay(if (keptMinutes[0] == KeepAlive.NEVER) KeepAlive.SMART else keptMinutes[0])
     }
 
     /**
@@ -111,7 +111,7 @@ object AxshBootstrap {
     private fun startDaemon(axsh: String?, minutes: Int): Daemon {
         if (axsh == null || !File(axsh).canExecute()) return Daemon.UNSUPPORTED
         val channel = try {
-            AxshBroker.openChannel()
+            Broker.openChannel()
         } catch (_: SecurityException) {
             return Daemon.NOT_PERMITTED
         } catch (e: Exception) {
@@ -159,19 +159,19 @@ object AxshBootstrap {
         dropStderr()
         // libaxshboot.so or base.apk: either goes with the old APK's directory on an update.
         val apk = System.getProperty("java.class.path")?.substringBefore(':')
-        val idleLimit = if (minutes == AxshKeepAlive.NEVER) Long.MAX_VALUE else minutes * 60_000L
-        Log.i(TAG, "kept as broker, idle limit ${if (minutes == AxshKeepAlive.NEVER) "never" else "$minutes min"}")
+        val idleLimit = if (minutes == KeepAlive.NEVER) Long.MAX_VALUE else minutes * 60_000L
+        Log.i(TAG, "kept as broker, idle limit ${if (minutes == KeepAlive.NEVER) "never" else "$minutes min"}")
 
         while (true) {
             Thread.sleep(CHECK_MS)
             if (apk != null && !File(apk).exists()) {
                 // AxManager was updated: let the next run start the new code, finish what runs.
                 Log.i(TAG, "$apk is gone, leaving")
-                AxshBroker.stop()
-                while (AxshBroker.activeSessions > 0) Thread.sleep(CHECK_MS)
+                Broker.stop()
+                while (Broker.activeSessions > 0) Thread.sleep(CHECK_MS)
                 exitProcess(0)
             }
-            if (AxshBroker.activeSessions == 0 && AxshBroker.idleMillis >= idleLimit) {
+            if (Broker.activeSessions == 0 && Broker.idleMillis >= idleLimit) {
                 Log.i(TAG, "idle for $minutes min, leaving")
                 exitProcess(0)
             }

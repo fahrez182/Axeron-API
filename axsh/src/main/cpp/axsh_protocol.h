@@ -1,6 +1,6 @@
 // Wire protocol between the native `axsh` client and whoever serves it: the server's own socket
-// (@axeron, AxshServer), an app's AxshBroker (@axsh.<uid>), or AxshBootstrap over a socketpair.
-// All three run the same code, frb.axeron.axsh.AxshSessions.
+// (@axeron, AxshServer), an app's Broker (@axsh.<uid>), or Bootstrap over a socketpair.
+// All three run the same code, frb.axeron.shell.Sessions.
 //
 // The client always brings its own pipes, and the shell is started on them
 // (IAxeronService.newAxshProcess): without a PTY they are the shell's stdio as they are, so no
@@ -42,17 +42,17 @@ namespace axsh {
 // in discovery. The server owns the listener.
 inline constexpr char SOCKET_NAME[] = "axeron";
 
-// Broker socket: BROKER_PREFIX + decimal uid, also abstract. Must match AxshBroker.socketName().
+// Broker socket: BROKER_PREFIX + decimal uid, also abstract. Must match Broker.socketName().
 inline constexpr char BROKER_PREFIX[] = "axsh.";
 
 // Without a broker, the client runs this class from its own APK in app_process and talks the
-// same protocol to it over a socketpair. Must match frb.axeron.axsh.AxshBootstrap.
-inline constexpr char BOOTSTRAP_CLASS[] = "frb.axeron.axsh.AxshBootstrap";
+// same protocol to it over a socketpair. Must match frb.axeron.shell.Bootstrap.
+inline constexpr char BOOTSTRAP_CLASS[] = "frb.axeron.shell.Bootstrap";
 
 // `libaxsh.so --axsh-daemon <minutes>`: the app's broker without a JVM, started by the
 // bootstrap with a channel into the server (IAxeronService.openAxshChannel) as its stdin. It
 // listens on the broker socket and passes each client's socket down the channel, one byte with
-// SCM_RIGHTS each; the server serves the session. Must match AxshBootstrap.DAEMON_FLAG.
+// SCM_RIGHTS each; the server serves the session. Must match Bootstrap.DAEMON_FLAG.
 inline constexpr char DAEMON_FLAG[] = "--axsh-daemon";
 
 inline constexpr int PIPE_FDS = 3;

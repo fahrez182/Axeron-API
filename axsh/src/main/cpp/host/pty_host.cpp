@@ -367,7 +367,7 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
     JNIEnv *env = nullptr;
     if (vm->GetEnv((void **) &env, JNI_VERSION_1_6) != JNI_OK) return -1;
 
-    auto clazz = env->FindClass("frb/axeron/axsh/host/PtyHost");
+    auto clazz = env->FindClass("frb/axeron/shell/host/PtyHost");
     if (clazz == nullptr) return JNI_ERR;
     JNINativeMethod methods[] = {
             {"start",         "([BI[BI[BBIII)[I", (void *) RishHost_startHost},

@@ -1,6 +1,9 @@
-package frb.axeron.axsh.host
+package frb.axeron.shell.host
 
+import android.os.IBinder
 import android.os.ParcelFileDescriptor
+import android.os.RemoteException
+import android.util.Log
 import frb.axeron.server.IAxshProcess
 
 /**
@@ -16,6 +19,7 @@ class AxshProcess private constructor(private val host: PtyHost) : IAxshProcess.
          * [stderr] is unused.
          */
         @JvmStatic
+        @JvmOverloads
         fun start(
             cmd: Array<String>,
             env: Array<String>?,
@@ -24,7 +28,9 @@ class AxshProcess private constructor(private val host: PtyHost) : IAxshProcess.
             stdout: ParcelFileDescriptor,
             stderr: ParcelFileDescriptor?,
             pty: Boolean,
-            size: Long
+            size: Long,
+            /** The caller's app record: when it dies, the shell goes too (as newProcess does). */
+            owner: IBinder? = null
         ): AxshProcess {
             require(cmd.isNotEmpty()) { "empty command" }
             val host = if (pty) {
@@ -35,7 +41,23 @@ class AxshProcess private constructor(private val host: PtyHost) : IAxshProcess.
             }
             host.start()
             if (pty && size != 0L) host.setWindowSize(size)
+            owner?.let { killWith(it, host) }
             return AxshProcess(host)
+        }
+
+        private fun killWith(owner: IBinder, host: PtyHost) {
+            try {
+                owner.linkToDeath({
+                    // Still running: an exited shell's pid may belong to someone else by now.
+                    if (host.exitCode == Int.MAX_VALUE) {
+                        host.destroy()
+                        Log.i("AxshProcess", "destroyed pid ${host.pid}: its owner died")
+                    }
+                }, 0)
+            } catch (e: RemoteException) {
+                // Already dead.
+                host.destroy()
+            }
         }
     }
 

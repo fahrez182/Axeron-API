@@ -22,11 +22,14 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RestrictTo;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
 import frb.axeron.api.core.AxeronSettings;
+import frb.axeron.api.core.Starter;
+import frb.axeron.shell.Axsh;
 import frb.axeron.server.Environment;
 import frb.axeron.server.IAxeronService;
 import frb.axeron.server.PluginInfo;
@@ -347,26 +350,61 @@ public class Axeron {
         }
     }
 
-    public static AxeronNewProcess newProcess(@NonNull String[] cmd, @Nullable Environment env, @Nullable String dir) {
+    /**
+     * Commands run through {@link Axsh}: {@code Axsh.exec(argv, env, dir)} for a program as it is,
+     * {@code Axsh.newProcess("-c", cmd)} for a shell line. This one is kept for
+     * {@link #relaunchServer()} alone, as a server from before axsh has nothing else.
+     */
+    @Nullable
+    private static AxeronNewProcess newProcess(@NonNull String[] cmd) {
         try {
-
-            return new AxeronNewProcess(requireService().newProcess(cmd, env != null ? env.getEnv() : null, dir));
+            return new AxeronNewProcess(requireService().newProcess(cmd, null, null));
         } catch (RemoteException | NullPointerException | IllegalStateException e) {
-//            Log.d(TAG, "Failed to execute command", e);
             Log.e(TAG, "newProcess", e);
             return null;
         }
-    }    private static final IBinder.DeathRecipient DEATH_RECIPIENT = () -> {
+    }
+
+    private static final IBinder.DeathRecipient DEATH_RECIPIENT = () -> {
         binderReady = false;
         onBinderReceived(null, null);
     };
 
-    public static AxeronNewProcess newProcess(@NonNull String cmd) {
-        return newProcess(new String[]{"/system/bin/sh", "-c", cmd});
+    /**
+     * Runs the server's starter again, in its own session: restarts the server, or replaces one
+     * that needs updating. Returns at once; the work goes on in the background.
+     */
+    public static void relaunchServer() {
+        String[] argv = AxeronCommandSession.getQuickCmd(Starter.INSTANCE.getInternalCommand(), true, false);
+        new Thread(() -> {
+            Process process;
+            try {
+                process = Axsh.exec(argv);
+            } catch (IOException e) {
+                // A server from before axsh (the update case): only newProcess is there.
+                Log.i(TAG, "relaunchServer: " + e.getMessage() + ", using newProcess");
+                process = newProcess(argv);
+            } catch (RuntimeException e) {
+                Log.e(TAG, "relaunchServer", e);
+                return;
+            }
+            if (process == null) return;
+            // Drained, not closed: the starter writes as it goes, and a closed pipe would end it.
+            drain(process.getInputStream());
+            drain(process.getErrorStream());
+        }, "AxeronRelaunch").start();
     }
 
-    public static AxeronNewProcess newProcess(@NonNull String[] cmd) {
-        return newProcess(cmd, Axeron.getEnvironment(TYPE_ENV), null);
+    private static void drain(java.io.InputStream stream) {
+        new Thread(() -> {
+            byte[] buffer = new byte[4096];
+            try (java.io.InputStream in = stream) {
+                while (in.read(buffer) != -1) {
+                    // discard
+                }
+            } catch (IOException ignored) {
+            }
+        }, "AxeronRelaunchDrain").start();
     }
 
     public static void destroy() {
@@ -462,18 +500,6 @@ public class Axeron {
             requireService().setWakeLock(enabled);
         } catch (RemoteException | IllegalStateException e) {
             Log.e(TAG, "setWakeLock", e);
-        }
-    }
-
-    /**
-     * Manager only: ends the axsh daemon of {@code uid}, if one runs, so its next axsh run starts
-     * a helper with the app's current keep-alive setting.
-     */
-    public static void closeAxshChannels(int uid) {
-        try {
-            requireService().closeAxshChannels(uid);
-        } catch (RemoteException | IllegalStateException e) {
-            Log.e(TAG, "closeAxshChannels", e);
         }
     }
 

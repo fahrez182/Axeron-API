@@ -17,6 +17,9 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import frb.axeron.shell.Axsh;
+import frb.axeron.server.Environment;
+
 public class AxeronCommandSession {
     private static final Pattern PID_LINE = Pattern.compile("(?m)^[ \\t]*(\\d+)[ \\t]*(?:\\r?\\n|$)");
     private final Object startLock = new Object();
@@ -30,7 +33,7 @@ public class AxeronCommandSession {
     Handler finishHandler = new Handler(Looper.getMainLooper());
     private String injectEnv;
     private String injectExport;
-    private AxeronNewProcess process;
+    private Process process;
     private BufferedWriter writer;
     private BufferedReader bufferedReader;
     private BufferedReader bufferedError;
@@ -114,7 +117,19 @@ public class AxeronCommandSession {
     }
 
     public void killSession() {
-        Axeron.newProcess("kill -TERM -" + pid);
+        // The command's own session (getQuickCmd's setsid), which destroy() alone wouldn't reach.
+        final int target = pid.get();
+        new Thread(() -> {
+            try {
+                Process kill = Axsh.exec(new String[]{"kill", "-TERM", "-" + target});
+                kill.getOutputStream().close();
+                kill.waitFor();
+                kill.getInputStream().close();
+                kill.getErrorStream().close();
+            } catch (Exception e) {
+                Log.w("CmdOut", "kill " + target + ": " + e.getMessage());
+            }
+        }, "SessionKill").start();
         destroy();
     }
 
@@ -122,15 +137,15 @@ public class AxeronCommandSession {
         destroy(); // bersihkan jika ada
         exitCode.set(0);
 
-        process = Axeron.newProcess(getQuickCmd(
-                        command,
-                        isCompatModeEnabled,
-                        true
-                ),
-                Axeron.getEnvironment(),
-                null);
-        if (process == null) {
-            errorListener("Failed to start process: Axeron service is unavailable");
+        Environment env = Axeron.getEnvironment();
+        try {
+            process = Axsh.exec(
+                    getQuickCmd(command, isCompatModeEnabled, true),
+                    env != null ? env.getEnv() : null,
+                    null);
+        } catch (Exception e) {
+            process = null;
+            errorListener("Failed to start process: " + e.getMessage());
             return;
         }
         writer = new BufferedWriter(new OutputStreamWriter(process.getOutputStream()));

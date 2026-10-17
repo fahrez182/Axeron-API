@@ -1,4 +1,4 @@
-package frb.axeron.axsh.host;
+package frb.axeron.shell.host;
 
 import android.annotation.SuppressLint;
 import android.os.ParcelFileDescriptor;

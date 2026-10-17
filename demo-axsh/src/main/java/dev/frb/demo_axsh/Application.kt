@@ -5,14 +5,14 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.util.Log
 import com.topjohnwu.superuser.Shell
-import frb.axeron.axsh.AxshBroker
+import frb.axeron.shell.Broker
 import java.io.File
 import kotlin.system.exitProcess
 
 /**
  * Two ways an app can run axsh, picked by [directConnection] (prefs key `axsh_direct_connection`):
  *
- * - **true**: the axsh dependency. Our own libaxsh.so, served by [AxshBroker] listening in this
+ * - **true**: the axsh dependency. Our own libaxsh.so, served by [Broker] listening in this
  *   process: the binder is fetched once and every shell after that is a socket connect away.
  * - **false**: no broker. The manager's libaxsh.so, as Termux runs it: each shell starts a
  *   bootstrap in app_process that asks the manager for the binder, then exits.
@@ -27,7 +27,7 @@ class Application : android.app.Application() {
         app = this
         directConnection = prefs(this).getBoolean(KEY_DIRECT_CONNECTION, DEFAULT_DIRECT_CONNECTION)
 
-        if (directConnection) AxshBroker.start(this)
+        if (directConnection) Broker.start(this)
         axsh = if (directConnection) ownAxsh() else managerAxsh()
         Log.i(TAG, "direct=$directConnection axsh=${axsh?.absolutePath} (exists=${axsh?.exists()})")
 
