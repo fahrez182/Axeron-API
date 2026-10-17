@@ -104,7 +104,8 @@ abstract class Service<UserServiceMgr : UserServiceManager,
         clientRecord: ClientRecord?
     ): Boolean
 
-    @Synchronized
+    // Not synchronized: ClientManager guards its own list, and this monitor is the one
+    // AxeronService.checkCaller takes, which axsh's authorize waits on.
     fun enforceCallingPermission(func: String) {
         val callingUid = getCallingUid()
         val callingPid = getCallingPid()
@@ -136,7 +137,7 @@ abstract class Service<UserServiceMgr : UserServiceManager,
         }
     }
 
-    @Synchronized
+    // Not synchronized: the target call can take long, and would hold every other caller back.
     @Throws(RemoteException::class)
     override fun transactRemote(data: Parcel, reply: Parcel?, flags: Int) {
         enforceCallingPermission("transactRemote")

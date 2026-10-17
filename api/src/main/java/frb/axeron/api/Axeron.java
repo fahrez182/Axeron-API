@@ -56,10 +56,6 @@ public class Axeron {
 
         @Override
         public void bindApplication(Bundle data) {
-//            serverUid = data.getInt(BIND_APPLICATION_SERVER_UID, -1);
-//            serverApiVersion = data.getInt(BIND_APPLICATION_SERVER_VERSION, -1);
-//            serverPatchVersion = data.getInt(BIND_APPLICATION_SERVER_PATCH_VERSION, -1);
-//            serverContext = data.getString(BIND_APPLICATION_SERVER_SECONTEXT);
             permissionGranted = data.getBoolean(BIND_APPLICATION_PERMISSION_GRANTED, false);
             shouldShowRequestPermissionRationale = data.getBoolean(BIND_APPLICATION_SHOULD_SHOW_REQUEST_PERMISSION_RATIONALE, false);
 
@@ -252,8 +248,6 @@ public class Axeron {
 
             scheduleBinderDeadListeners();
         } else {
-//            SharedPreferences prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE);
-
             if (pingBinder()) {
                 binder.unlinkToDeath(DEATH_RECIPIENT, 0);
             }
@@ -350,21 +344,6 @@ public class Axeron {
         }
     }
 
-    /**
-     * Commands run through {@link Axsh}: {@code Axsh.exec(argv, env, dir)} for a program as it is,
-     * {@code Axsh.newProcess("-c", cmd)} for a shell line. This one is kept for
-     * {@link #relaunchServer()} alone, as a server from before axsh has nothing else.
-     */
-    @Nullable
-    private static AxeronNewProcess newProcess(@NonNull String[] cmd) {
-        try {
-            return new AxeronNewProcess(requireService().newProcess(cmd, null, null));
-        } catch (RemoteException | NullPointerException | IllegalStateException e) {
-            Log.e(TAG, "newProcess", e);
-            return null;
-        }
-    }
-
     private static final IBinder.DeathRecipient DEATH_RECIPIENT = () -> {
         binderReady = false;
         onBinderReceived(null, null);
@@ -372,7 +351,9 @@ public class Axeron {
 
     /**
      * Runs the server's starter again, in its own session: restarts the server, or replaces one
-     * that needs updating. Returns at once; the work goes on in the background.
+     * that needs updating. Returns at once; the work goes on in the background. When the starter
+     * can't be run (a server from before axsh has no way to), the server is stopped instead, for
+     * the user to start again.
      */
     public static void relaunchServer() {
         String[] argv = AxeronCommandSession.getQuickCmd(Starter.INSTANCE.getInternalCommand(), true, false);
@@ -380,15 +361,11 @@ public class Axeron {
             Process process;
             try {
                 process = Axsh.exec(argv);
-            } catch (IOException e) {
-                // A server from before axsh (the update case): only newProcess is there.
-                Log.i(TAG, "relaunchServer: " + e.getMessage() + ", using newProcess");
-                process = newProcess(argv);
-            } catch (RuntimeException e) {
-                Log.e(TAG, "relaunchServer", e);
+            } catch (IOException | RuntimeException e) {
+                Log.e(TAG, "relaunchServer, stopping the server", e);
+                destroy();
                 return;
             }
-            if (process == null) return;
             // Drained, not closed: the starter writes as it goes, and a closed pipe would end it.
             drain(process.getInputStream());
             drain(process.getErrorStream());
@@ -522,14 +499,6 @@ public class Axeron {
         }
     }
 
-    private static RuntimeException rethrowAsRuntimeException(String message, RemoteException e) {
-        return new RuntimeException(message, e);
-    }
-
-    private static RuntimeException rethrowAsRuntimeException(RemoteException e) {
-        return new RuntimeException(e);
-    }
-
     public static int checkRemotePermission(String permission) {
         if (getAxeronInfo().isRoot()) return PackageManager.PERMISSION_GRANTED;
         try {
@@ -601,7 +570,4 @@ public class Axeron {
     public interface OnRequestPermissionResultListener {
         void onRequestPermissionResult(int requestCode, int grantResult);
     }
-
-
-
 }

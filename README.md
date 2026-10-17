@@ -12,7 +12,7 @@ Guides: [axmanager.app](https://axmanager.app), in particular
 
 | Module | What it is |
 |---|---|
-| `api` | The client API: `Axeron` (binder, permission, listeners), `newProcess`, file service, plugins, server info |
+| `api` | The client API: `Axeron` (binder, permission, listeners), `relaunchServer`, file service, plugins, server info |
 | `aidl` | The server's binder interfaces (`IAxeronService`, `IAxshProcess`, file service, Shizuku's) |
 | `shared` | Constants shared by the server and its clients (`AxeronApiConstant`, `ShizukuApiConstant`) |
 | `provider` | `AxeronProvider`, through which the server hands an app its binder |
