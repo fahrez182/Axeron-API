@@ -14,23 +14,27 @@ namespace axsh {
 
 namespace {
 
-int connect_abstract(const char* name) {
+// Abstract namespace: leading NUL, then the name. No filesystem entry, no label to create.
+bool abstract_address(const char* name, sockaddr_un* addr, socklen_t* len) {
     const size_t name_len = std::strlen(name);
-    sockaddr_un addr{};
-    if (name_len + 1 > sizeof(addr.sun_path)) {
+    if (name_len + 1 > sizeof(addr->sun_path)) {
         errno = ENAMETOOLONG;
-        return -1;
+        return false;
     }
+    *addr = {};
+    addr->sun_family = AF_UNIX;
+    std::memcpy(addr->sun_path + 1, name, name_len);
+    *len = static_cast<socklen_t>(offsetof(sockaddr_un, sun_path) + 1 + name_len);
+    return true;
+}
+
+int connect_abstract(const char* name) {
+    sockaddr_un addr;
+    socklen_t len;
+    if (!abstract_address(name, &addr, &len)) return -1;
 
     int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (fd < 0) return -1;
-
-    addr.sun_family = AF_UNIX;
-    // Abstract namespace: leading NUL, then the name. No filesystem entry, no label to create.
-    addr.sun_path[0] = '\0';
-    std::memcpy(addr.sun_path + 1, name, name_len);
-
-    const socklen_t len = static_cast<socklen_t>(offsetof(sockaddr_un, sun_path) + 1 + name_len);
     if (::connect(fd, reinterpret_cast<sockaddr*>(&addr), len) != 0) {
         const int err = errno;
         ::close(fd);
@@ -38,6 +42,10 @@ int connect_abstract(const char* name) {
         return -1;
     }
     return fd;
+}
+
+void broker_name(char* out, size_t size) {
+    std::snprintf(out, size, "%s%u", BROKER_PREFIX, static_cast<unsigned>(::getuid()));
 }
 
 }  // namespace
@@ -48,7 +56,7 @@ int connect_server() {
 
 int connect_broker() {
     char name[32];
-    std::snprintf(name, sizeof(name), "%s%u", BROKER_PREFIX, static_cast<unsigned>(::getuid()));
+    broker_name(name, sizeof(name));
 
     const int fd = connect_abstract(name);
     if (fd < 0) return -1;
@@ -64,14 +72,37 @@ int connect_broker() {
     return fd;
 }
 
+int listen_broker() {
+    char name[32];
+    broker_name(name, sizeof(name));
+    sockaddr_un addr;
+    socklen_t len;
+    if (!abstract_address(name, &addr, &len)) return -1;
+
+    int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (fd < 0) return -1;
+    if (::bind(fd, reinterpret_cast<sockaddr*>(&addr), len) != 0 || ::listen(fd, 16) != 0) {
+        const int err = errno;
+        ::close(fd);
+        errno = err;
+        return -1;
+    }
+    return fd;
+}
+
 namespace {
+
+bool own_exe(char* out, size_t size) {
+    const ssize_t n = ::readlink("/proc/self/exe", out, size - 1);
+    if (n <= 0) return false;
+    out[n] = '\0';
+    return true;
+}
 
 // /data/app/<...>/lib/<abi>/libaxsh.so -> /data/app/<...>/base.apk
 bool find_own_apk(char* out, size_t size) {
     char exe[PATH_MAX];
-    const ssize_t n = ::readlink("/proc/self/exe", exe, sizeof(exe) - 1);
-    if (n <= 0) return false;
-    exe[n] = '\0';
+    if (!own_exe(exe, sizeof(exe))) return false;
 
     char* lib = nullptr;
     for (char* p = std::strstr(exe, "/lib/"); p != nullptr; p = std::strstr(p + 1, "/lib/")) lib = p;
@@ -86,7 +117,9 @@ bool find_own_apk(char* out, size_t size) {
 
 int spawn_bootstrap() {
     char apk[PATH_MAX];
-    if (!find_own_apk(apk, sizeof(apk))) {
+    // Ourselves, so the bootstrap can start us again as the daemon.
+    char exe[PATH_MAX];
+    if (!find_own_apk(apk, sizeof(apk)) || !own_exe(exe, sizeof(exe))) {
         errno = ENOENT;
         return -1;
     }
@@ -131,6 +164,7 @@ int spawn_bootstrap() {
                 const_cast<char*>("--nice-name=axsh_bootstrap"),
                 const_cast<char*>(BOOTSTRAP_CLASS),
                 fd_arg,
+                exe,
                 nullptr,
         };
         ::execv(argv[0], argv);

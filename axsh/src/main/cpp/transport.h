@@ -12,10 +12,16 @@ int connect_server();
 // Returns a connected fd, or -1 on failure.
 int connect_broker();
 
+// Listens on this app's broker socket (@axsh.<uid>). -1 if it can't, e.g. a broker is there.
+int listen_broker();
+
 // Starts AxshBootstrap in app_process from the APK this binary was installed with, connected to
 // us by a socketpair, and returns our end. It speaks the same protocol. -1 on failure, e.g.
 // when this binary was copied out of an APK's lib directory.
 int spawn_bootstrap();
+
+// `--axsh-daemon`: see DAEMON_FLAG. Returns the exit code.
+int run_daemon(const char* minutes);
 
 // Writes all of data, with fds[0..nfds) attached to its first byte as SCM_RIGHTS.
 bool write_with_fds(int fd, const void* data, size_t len, const int* fds, size_t nfds);

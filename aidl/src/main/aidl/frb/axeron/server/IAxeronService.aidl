@@ -51,5 +51,13 @@ interface IAxeronService {
     IAxshProcess newAxshProcess(in String[] cmd, in String[] env, in String dir,
             in ParcelFileDescriptor stdin, in ParcelFileDescriptor stdout,
             in ParcelFileDescriptor stderr, boolean pty, long size) = 112;
+    // One end of a unix stream socket into the server's axsh sessions, for a helper of the
+    // caller's uid (axsh's native daemon). Each byte sent on it carries one connected axsh
+    // client socket (SCM_RIGHTS), which the server then serves itself, as on its own socket;
+    // only clients of the caller's uid are taken. Closed when the server stops.
+    ParcelFileDescriptor openAxshChannel() = 113;
+    // Manager only: closes every axsh channel of uid, so that app's daemon exits (its keep-alive
+    // setting changed); the next axsh run starts a helper with the new setting.
+    void closeAxshChannels(int uid) = 114;
     void exit() = 16777114;
 }

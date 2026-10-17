@@ -7,6 +7,7 @@ import android.os.Binder
 import android.os.Bundle
 import android.os.IBinder
 import android.os.Parcel
+import android.os.ParcelFileDescriptor
 import android.os.Process
 import android.util.Log
 import frb.axeron.server.IAxeronService
@@ -91,6 +92,13 @@ object AxshBroker : AxshSessions.Host {
     internal val activeSessions: Int get() = sessions.active
 
     internal val idleMillis: Long get() = sessions.idleMillis
+
+    /**
+     * A channel into the server's own axsh sessions (IAxeronService.openAxshChannel), for
+     * [AxshBootstrap] to hand to the native daemon. Null when the server is out of reach or too
+     * old to have one; throws [SecurityException] while this app isn't allowed yet.
+     */
+    internal fun openChannel(): ParcelFileDescriptor? = service()?.openAxshChannel()
 
     /** The manager's keep-alive setting, from its binder reply; for [AxshBootstrap]. */
     @Volatile

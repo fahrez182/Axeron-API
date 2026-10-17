@@ -49,6 +49,12 @@ inline constexpr char BROKER_PREFIX[] = "axsh.";
 // same protocol to it over a socketpair. Must match frb.axeron.axsh.AxshBootstrap.
 inline constexpr char BOOTSTRAP_CLASS[] = "frb.axeron.axsh.AxshBootstrap";
 
+// `libaxsh.so --axsh-daemon <minutes>`: the app's broker without a JVM, started by the
+// bootstrap with a channel into the server (IAxeronService.openAxshChannel) as its stdin. It
+// listens on the broker socket and passes each client's socket down the channel, one byte with
+// SCM_RIGHTS each; the server serves the session. Must match AxshBootstrap.DAEMON_FLAG.
+inline constexpr char DAEMON_FLAG[] = "--axsh-daemon";
+
 inline constexpr int PIPE_FDS = 3;
 inline constexpr int PTY_FDS = 2;
 

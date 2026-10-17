@@ -19,7 +19,7 @@ find_package(cxx REQUIRED CONFIG)
 
 # Packaged as libaxsh.so so it lands in nativeLibraryDir, where exec is allowed (W^X).
 add_executable(libaxsh.so
-        main.cpp transport.cpp)
+        main.cpp transport.cpp daemon.cpp)
 
 target_link_libraries(libaxsh.so log cxx::cxx)
 

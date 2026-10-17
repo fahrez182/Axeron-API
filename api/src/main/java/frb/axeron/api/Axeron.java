@@ -465,6 +465,18 @@ public class Axeron {
         }
     }
 
+    /**
+     * Manager only: ends the axsh daemon of {@code uid}, if one runs, so its next axsh run starts
+     * a helper with the app's current keep-alive setting.
+     */
+    public static void closeAxshChannels(int uid) {
+        try {
+            requireService().closeAxshChannels(uid);
+        } catch (RemoteException | IllegalStateException e) {
+            Log.e(TAG, "closeAxshChannels", e);
+        }
+    }
+
     /** False as well when the server can't be reached. */
     public static boolean isWakeLockHeld() {
         try {

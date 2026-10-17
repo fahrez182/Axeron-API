@@ -57,8 +57,10 @@ ProcessBuilder(axsh.path, "-c", "id").start()
 ```
 
 Nothing to bundle, and it always matches the installed AxManager. In ADB mode each run starts a
-short-lived helper in `app_process` that asks AxManager for the server's binder, as in Termux;
-AxManager's **Keep axsh ready** (per app, in its Privilege details) keeps that helper around.
+short-lived helper in `app_process` that asks AxManager for the server's binder, as in Termux.
+After that first command the helper leaves `libaxsh.so --axsh-daemon` behind (a few MB, no JVM),
+which hands later commands straight to the server; AxManager's **Keep axsh ready** (per app, in
+its Privilege details) sets how long it stays: smart (default, 5 idle minutes), no limit or off.
 
 ### With the `axsh` module: the in-app broker
 

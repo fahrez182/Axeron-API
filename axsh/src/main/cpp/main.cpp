@@ -332,6 +332,8 @@ int run_session(int fd, char** args, int count, bool pty) {
 int main(int argc, char** argv) {
     std::signal(SIGPIPE, SIG_IGN);
 
+    if (argc >= 2 && std::strcmp(argv[1], DAEMON_FLAG) == 0) return run_daemon(argc >= 3 ? argv[2] : nullptr);
+
     // An interactive terminal gets a PTY on the server; anything else gets plain pipes.
     const bool pty = ::isatty(STDIN_FILENO) && ::isatty(STDOUT_FILENO);
 
