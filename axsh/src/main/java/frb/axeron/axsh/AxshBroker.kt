@@ -9,6 +9,7 @@ import android.os.IBinder
 import android.os.Parcel
 import android.os.ParcelFileDescriptor
 import android.os.Process
+import android.os.SystemClock
 import android.util.Log
 import frb.axeron.server.IAxeronService
 import frb.axeron.shared.ShizukuApiConstant
@@ -35,7 +36,7 @@ object AxshBroker : AxshSessions.Host {
     // Mirrors ServerConstants.REQUEST_BINDER_AXRUNTIME and the manager's package.
     private const val ACTION_REQUEST_BINDER = "AxRuntime.REQUEST_BINDER"
     private const val MANAGER_PACKAGE = "frb.axeron.manager"
-    private const val BINDER_TIMEOUT_SECONDS = 5L
+    private const val BINDER_TIMEOUT_MS = 5_000L
 
     private const val PERMISSION_REQUEST_CODE = 0x4158
 
@@ -217,11 +218,13 @@ object AxshBroker : AxshSessions.Host {
 
     /** Asks the manager for the server binder; the reply arrives as transaction 1 on [receiver]. */
     private fun requestBinder(): IBinder? {
+        val start = SystemClock.uptimeMillis()
         val latch = CountDownLatch(1)
         var received: IBinder? = null
         val receiver = object : Binder() {
             override fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
                 if (code != 1) return super.onTransact(code, data, reply, flags)
+                if (latch.count == 0L) return true
                 received = data.readStrongBinder()
                 // Then the version code, the library dir and, from newer managers, the
                 // keep-alive setting; an older reply simply ends early.
@@ -240,6 +243,8 @@ object AxshBroker : AxshSessions.Host {
         val intent = Intent(ACTION_REQUEST_BINDER)
             .setPackage(MANAGER_PACKAGE)
             .addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
+            // We're usually a background app: the background queue can hold this for seconds.
+            .addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
             .putExtra("data", Bundle().apply {
                 putBinder("binder", receiver)
                 // Which app's keep-alive setting to answer with (see AxshKeepAlive).
@@ -253,7 +258,7 @@ object AxshBroker : AxshSessions.Host {
             return null
         }
 
-        if (!latch.await(BINDER_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+        if (!latch.await(BINDER_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
             Log.w(tag, "no binder from $MANAGER_PACKAGE")
             return null
         }
@@ -262,6 +267,7 @@ object AxshBroker : AxshSessions.Host {
             Log.w(tag, "manager replied without a live binder")
             return null
         }
+        Log.i(tag, "binder from $MANAGER_PACKAGE in ${SystemClock.uptimeMillis() - start} ms")
         return binder
     }
 }

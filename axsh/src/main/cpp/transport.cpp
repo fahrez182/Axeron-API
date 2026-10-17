@@ -5,6 +5,7 @@
 #include <climits>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -115,11 +116,23 @@ bool find_own_apk(char* out, size_t size) {
 
 }  // namespace
 
+// libaxshboot.so next to us: the bootstrap's own dex, a small fraction of the APK to start with.
+bool find_boot_dex(const char* exe, char* out, size_t size) {
+    const char* slash = std::strrchr(exe, '/');
+    if (slash == nullptr) return false;
+    const int dir_len = static_cast<int>(slash - exe);
+    if (std::snprintf(out, size, "%.*s/libaxshboot.so", dir_len, exe) >= static_cast<int>(size)) return false;
+    return ::access(out, R_OK) == 0;
+}
+
 int spawn_bootstrap() {
-    char apk[PATH_MAX];
     // Ourselves, so the bootstrap can start us again as the daemon.
     char exe[PATH_MAX];
-    if (!find_own_apk(apk, sizeof(apk)) || !own_exe(exe, sizeof(exe))) {
+    // What app_process loads AxshBootstrap from: our own dex, else (older APKs) the whole APK.
+    char classpath_file[PATH_MAX];
+    if (!own_exe(exe, sizeof(exe)) ||
+        (!find_boot_dex(exe, classpath_file, sizeof(classpath_file)) &&
+         !find_own_apk(classpath_file, sizeof(classpath_file)))) {
         errno = ENOENT;
         return -1;
     }
@@ -153,9 +166,15 @@ int spawn_bootstrap() {
         }
 
         char classpath[PATH_MAX + 32];
-        std::snprintf(classpath, sizeof(classpath), "-Djava.class.path=%s", apk);
+        std::snprintf(classpath, sizeof(classpath), "-Djava.class.path=%s", classpath_file);
         char fd_arg[16];
         std::snprintf(fd_arg, sizeof(fd_arg), "%d", child_fd);
+        // When we started it (SystemClock.uptimeMillis's clock), so it can log its JVM startup.
+        timespec now{};
+        ::clock_gettime(CLOCK_MONOTONIC, &now);
+        char spawned_at[24];
+        std::snprintf(spawned_at, sizeof(spawned_at), "%lld",
+                      static_cast<long long>(now.tv_sec) * 1000 + now.tv_nsec / 1'000'000);
 
         char* const argv[] = {
                 const_cast<char*>("/system/bin/app_process"),
@@ -165,6 +184,7 @@ int spawn_bootstrap() {
                 const_cast<char*>(BOOTSTRAP_CLASS),
                 fd_arg,
                 exe,
+                spawned_at,
                 nullptr,
         };
         ::execv(argv[0], argv);

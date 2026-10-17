@@ -3,6 +3,7 @@ package frb.axeron.axsh
 import android.content.Intent
 import android.net.LocalSocket
 import android.os.ParcelFileDescriptor
+import android.os.SystemClock
 import android.system.Os
 import android.system.OsConstants
 import android.util.Log
@@ -18,9 +19,11 @@ import kotlin.system.exitProcess
  * `app_process` entry for apps that run axsh without a broker of their own (Termux executing
  * the manager's libaxsh.so, for instance). The native client starts
  *
- *     app_process -Djava.class.path=<manager base.apk> /system/bin frb.axeron.axsh.AxshBootstrap <fd>
+ *     app_process -Djava.class.path=<lib dir>/libaxshboot.so /system/bin frb.axeron.axsh.AxshBootstrap <fd> <libaxsh.so> <spawn time>
  *
- * with one end of a socketpair as `<fd>`. Running as the caller's uid, this process asks the
+ * with one end of a socketpair as `<fd>`. The classpath is this class's own R8-shrunk dex (see
+ * bootstrapDex in build.gradle.kts), or the whole base.apk for APKs without it, which starts
+ * slower. Running as the caller's uid, this process asks the
  * manager for the server binder and serves that session over the fd, so the client sees the
  * same protocol as with an in-app [AxshBroker].
  *
@@ -56,6 +59,10 @@ object AxshBootstrap {
         }
         // The libaxsh.so that started us, for the daemon; older clients don't pass it.
         val axsh = args.getOrNull(1)
+        // When it did (uptimeMillis's clock): the cost of app_process up to here.
+        args.getOrNull(2)?.toLongOrNull()?.let {
+            Log.i(TAG, "JVM up ${SystemClock.uptimeMillis() - it} ms after spawn")
+        }
 
         val socket = try {
             connectedSocket(ParcelFileDescriptor.adoptFd(fdNumber).fileDescriptor)
@@ -150,6 +157,7 @@ object AxshBootstrap {
     private fun stay(minutes: Int) {
         // Done with the terminal that started us: its stderr would keep the tty open for nothing.
         dropStderr()
+        // libaxshboot.so or base.apk: either goes with the old APK's directory on an update.
         val apk = System.getProperty("java.class.path")?.substringBefore(':')
         val idleLimit = if (minutes == AxshKeepAlive.NEVER) Long.MAX_VALUE else minutes * 60_000L
         Log.i(TAG, "kept as broker, idle limit ${if (minutes == AxshKeepAlive.NEVER) "never" else "$minutes min"}")
