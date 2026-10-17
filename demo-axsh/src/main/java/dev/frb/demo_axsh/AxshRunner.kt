@@ -1,6 +1,7 @@
 package dev.frb.demo_axsh
 
 import com.topjohnwu.superuser.Shell
+import frb.axeron.axsh.Axsh
 import java.io.File
 import kotlin.concurrent.thread
 
@@ -27,6 +28,11 @@ enum class Runner(val label: String, val description: String) {
         "libsu cached shell",
         "libsu's main shell, started on libaxsh.so once and kept: later commands skip the session setup."
     ),
+    LIBSU_DIRECT(
+        "libsu, no exec",
+        "libsu on Axsh.newProcess(): the shell is started from this process over binder, no " +
+                "libaxsh.so run, so no useLegacyPackaging. Needs direct connection (the broker)."
+    ),
 }
 
 object AxshRunner {
@@ -36,8 +42,17 @@ object AxshRunner {
 
     fun run(command: String, stdin: String? = null): AxshResult = when (runner) {
         Runner.PROCESS -> runProcess(command, stdin)
-        Runner.LIBSU -> runLibsu(command, stdin)
+        Runner.LIBSU -> runLibsu(command, stdin) { Shell.cmd(it) }
+        Runner.LIBSU_DIRECT -> runLibsu(command, stdin) { directShell().newJob().add(it) }
     }
+
+    /** Built on our own Process, so not libsu's main shell (that one needs a path to exec). */
+    @Volatile
+    private var direct: Shell? = null
+
+    @Synchronized
+    private fun directShell(): Shell =
+        direct?.takeIf { it.isAlive } ?: Shell.Builder.create().build(Axsh.newProcess()).also { direct = it }
 
     /**
      * libaxsh.so straight from [ProcessBuilder] rather than through libsu, so stdout and stderr
@@ -65,13 +80,14 @@ object AxshRunner {
     }
 
     /**
-     * Through libsu's cached main shell (Application points its builder at libaxsh.so). The first
-     * call pays for starting it; the rest are a write to an already open shell.
+     * Through a cached libsu shell, made into a job by [job]: libsu's main shell (Application
+     * points its builder at libaxsh.so) or the one on [Axsh.newProcess]. The first call pays for
+     * starting it; the rest are a write to an already open shell.
      *
      * Each command runs in a subshell, so `exit` or `cd` can't end or change the cached shell, and
      * its stdin is [stdin] as a here-document: the shell's own stdin is libsu's command stream.
      */
-    fun runLibsu(command: String, stdin: String? = null): AxshResult {
+    private fun runLibsu(command: String, stdin: String?, job: (String) -> Shell.Job): AxshResult {
         val start = System.nanoTime()
         fun elapsed() = (System.nanoTime() - start) / 1_000_000
 
@@ -83,19 +99,27 @@ object AxshRunner {
         return try {
             val out = mutableListOf<String>()
             val err = mutableListOf<String>()
-            val result = Shell.cmd(script).to(out, err).exec()
+            val result = job(script).to(out, err).exec()
             AxshResult(result.code, out.joinToString("\n"), err.joinToString("\n"), elapsed())
         } catch (e: Exception) {
             AxshResult(-1, "", "", elapsed(), e.message ?: e.javaClass.simpleName)
         }
     }
 
-    /** The cached shell, if libsu has started one. */
+    /** The current runner's cached shell is alive. */
     val cachedShellAlive: Boolean
-        get() = Shell.getCachedShell()?.isAlive == true
+        get() = when (runner) {
+            Runner.LIBSU_DIRECT -> direct?.isAlive == true
+            else -> Shell.getCachedShell()?.isAlive == true
+        }
 
-    /** Drops libsu's cached shell; the next libsu command starts a new one. */
+    /** Drops the current runner's cached shell; its next command starts a new one. */
     fun closeCachedShell() {
-        runCatching { Shell.getCachedShell()?.close() }
+        runCatching {
+            when (runner) {
+                Runner.LIBSU_DIRECT -> direct?.close()
+                else -> Shell.getCachedShell()?.close()
+            }
+        }
     }
 }

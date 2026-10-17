@@ -8,6 +8,8 @@ import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -149,6 +151,7 @@ private fun TestScreen(modifier: Modifier = Modifier) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ModeCard(
     runningAll: Boolean,
@@ -198,12 +201,13 @@ private fun ModeCard(
 
             HorizontalDivider(Modifier.padding(vertical = 4.dp))
             Text("Runner", style = MaterialTheme.typography.labelLarge)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Runner.entries.forEach {
                     FilterChip(
                         selected = runner == it,
                         onClick = { onRunner(it) },
-                        enabled = !runningAll,
+                        // No exec needs the broker, which only direct connection starts.
+                        enabled = !runningAll && (it != Runner.LIBSU_DIRECT || Application.directConnection),
                         label = { Text(it.label) },
                     )
                 }
@@ -213,7 +217,7 @@ private fun ModeCard(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            if (runner == Runner.LIBSU) {
+            if (runner != Runner.PROCESS) {
                 // runs: read again after every run, as libsu starts the shell on first use.
                 val alive = remember(runs) { AxshRunner.cachedShellAlive }
                 Row(verticalAlignment = Alignment.CenterVertically) {

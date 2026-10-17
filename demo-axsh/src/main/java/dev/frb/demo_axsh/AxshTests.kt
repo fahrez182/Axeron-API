@@ -77,7 +77,7 @@ val axshTests: List<AxshTest> = listOf(
         val detail = results.joinToString("\n") { "pid ${it.out}  ${it.millis}ms" }
         val bad = results.firstOrNull { !it.ok }
         val pids = results.map { it.out }.toSet()
-        val expected = if (AxshRunner.runner == Runner.LIBSU) 1 else 4
+        val expected = if (AxshRunner.runner == Runner.PROCESS) 4 else 1
         when {
             bad != null -> fail(bad.why(), detail)
             pids.size != expected -> fail("expected $expected shell(s), got ${pids.size}: $pids", detail)
