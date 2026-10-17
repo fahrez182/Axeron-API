@@ -24,6 +24,12 @@ android {
         compose = true
         buildConfig = true
     }
+    packaging {
+        // libaxsh.so is exec'd, so it must be extracted to nativeLibraryDir.
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
 }
 
 dependencies {
@@ -39,4 +45,6 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 
     implementation(libs.topjohnwu.libsu.core)
+    // Our own libaxsh.so and the in-process broker, for axsh_direct_connection.
+    implementation(project(":axsh"))
 }
