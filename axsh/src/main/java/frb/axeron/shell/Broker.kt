@@ -27,7 +27,7 @@ import java.util.concurrent.TimeUnit
  *
  * The binder comes from the host when it holds one (the manager), otherwise from the manager the
  * same way axerish got it: an `AxRuntime.REQUEST_BINDER` broadcast answered by
- * `ShellBinderRequestHandler`.
+ * the manager's `ShellBinderRequestHandler`.
  */
 object Broker : Sessions.Host {
 
