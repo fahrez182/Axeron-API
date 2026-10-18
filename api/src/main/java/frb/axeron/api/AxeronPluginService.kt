@@ -293,8 +293,10 @@ object AxeronPluginService {
             jobStderr.await()
         }
 
+        // No process.destroy(): it SIGKILLs the command's whole session, so a job the plugin
+        // left running in the background (`daemon >/dev/null 2>&1 &`) would die with it. Those
+        // are stopped with the plugin, by its marker.
         val exit = process.waitFor()
-        process.destroy()
 
         ResultExec(
             code = exit,
@@ -361,8 +363,8 @@ object AxeronPluginService {
                     jobErr.await()
                 }
 
+                // No process.destroy(), as in execWithIO.
                 val exit = process.waitFor()
-                process.destroy()
 
                 ResultExec(
                     code = exit,
