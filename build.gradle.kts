@@ -100,13 +100,18 @@ subprojects {
             val pub = extensions.findByName("publishing")
             println("PROJECT ${project.path} publishingExt = ${pub != null}")
 
-            val group = if (project.parent == rootProject) {
+            // On JitPack, its own coordinates: com.github.<user>.<repo>:<module>:<tag>, as it
+            // serves them. Elsewhere (mavenLocal), dev.frb.axeron and the API version code.
+            val jitpack = System.getenv("JITPACK") == "true"
+            val group = if (jitpack) {
+                "${System.getenv("GROUP")}.${System.getenv("ARTIFACT")}"
+            } else if (project.parent == rootProject) {
                 groupIdBase
             } else {
                 "${groupIdBase}.${project.parent?.name}"
             }
 
-            version = findProperty("api_version_code")!!
+            version = if (jitpack) System.getenv("VERSION") else findProperty("api_version_code")!!
 
             println("${project.displayName}: ${group}:${project.name}:${version}")
 

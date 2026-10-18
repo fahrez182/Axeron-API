@@ -22,17 +22,48 @@ Guides: [axmanager.app](https://axmanager.app), in particular
 
 ## Using it
 
-Include the modules you need as Gradle projects (as AxManager does), or publish them to Maven
-local and depend on them from there:
+### From JitPack
+
+Add the repository:
+
+```kotlin
+// settings.gradle.kts
+dependencyResolutionManagement {
+    repositories {
+        google()
+        mavenCentral()
+        maven("https://jitpack.io")
+    }
+}
+```
+
+Then the modules you need, at a release tag (or a commit hash, or `main-SNAPSHOT`):
+
+```kotlin
+// build.gradle.kts
+dependencies {
+    implementation("com.github.fahrez182.Axeron-API:api:2.0.0")
+    implementation("com.github.fahrez182.Axeron-API:axsh:2.0.0")
+}
+```
+
+Published modules: `api`, `aidl`, `shared`, `provider`, `axsh`. Each brings what it runs on
+(`api`: `aidl`, `shared`, `axsh`; `axsh`: `aidl`, `shared`); declare one yourself only to use
+its classes directly.
+
+### As Gradle projects, or from Maven local
+
+Include the modules as Gradle projects (as AxManager does), or publish them to Maven local and
+depend on them from there:
 
 ```bash
 ./gradlew publishToMavenLocal
 ```
 
 ```kotlin
-// group dev.frb.axeron, version = api_version_code from manifest.gradle.kts
-implementation("dev.frb.axeron:api:<version>")
-implementation("dev.frb.axeron:axsh:<version>")
+// group dev.frb.axeron, version = api_version_code from manifest.gradle.kts (20000 for 2.0.0)
+implementation("dev.frb.axeron:api:20000")
+implementation("dev.frb.axeron:axsh:20000")
 ```
 
 Every app needs AxManager's permission (Allowed, Ask or Denied in AxManager's Privilege page).
