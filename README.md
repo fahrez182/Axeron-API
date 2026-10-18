@@ -42,7 +42,6 @@ Then the modules you need, at a release tag (or a commit hash, or `main-SNAPSHOT
 ```kotlin
 // build.gradle.kts
 dependencies {
-    implementation("com.github.fahrez182.Axeron-API:api:2.0.0")
     implementation("com.github.fahrez182.Axeron-API:axsh:2.0.0")
 }
 ```
@@ -62,7 +61,6 @@ depend on them from there:
 
 ```kotlin
 // group dev.frb.axeron, version = api_version_code from manifest.gradle.kts (20000 for 2.0.0)
-implementation("dev.frb.axeron:api:20000")
 implementation("dev.frb.axeron:axsh:20000")
 ```
 
