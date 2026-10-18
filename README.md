@@ -17,7 +17,7 @@ Guides: [axmanager.app](https://axmanager.app), in particular
 | `shared` | Constants shared by the server and its clients (`AxeronApiConstant`, `ShizukuApiConstant`) |
 | `provider` | `AxeronProvider`, through which the server hands an app its binder |
 | `server-shared` | Server-side code shared with the manager |
-| `axsh` | The `axsh` shell: native client `libaxsh.so`, its in-app broker and the `app_process` bootstrap |
+| `axsh` | The `axsh` shell: native client `libaxsh.so`, its in-app broker, the `app_process` bootstrap, and `ShellService` |
 | `demo-axsh` | Test bench app for `axsh` (see below) |
 
 ## Using it
@@ -99,6 +99,86 @@ holds the binder passes it: `Broker.start(this) { Axeron.getBinder() }`.
 Shell.setDefaultBuilder(Shell.Builder.create().setCommands(axsh.path))
 ```
 
+## ShellService: your own code as shell or root
+
+libsu's `RootService`, but through axsh, so it works in ADB mode too. Your service class runs in
+an `app_process` started as the server's uid (2000 in ADB mode, 0 with root), loaded from your
+APK. Needs the `axsh` module; `Broker.start` is optional (without it, AxManager's `libaxsh.so`
+starts the process).
+
+An AIDL interface, as for any bound service:
+
+```aidl
+// src/main/aidl/com/example/IMyService.aidl
+interface IMyService {
+    int getUid();
+    String exec(String command);
+}
+```
+
+```kotlin
+// build.gradle.kts
+android { buildFeatures { aidl = true } }
+```
+
+The service. Everything in it runs as shell or root:
+
+```kotlin
+class MyService : ShellService() {
+    override fun onBind(intent: Intent): IBinder {
+        return object : IMyService.Stub() {
+            override fun getUid(): Int {
+                return Os.getuid()   // 2000 or 0
+            }
+
+            override fun exec(command: String): String {
+                val process = Runtime.getRuntime().exec(arrayOf("sh", "-c", command))
+                return process.inputStream.bufferedReader().readText()
+            }
+        }
+    }
+}
+```
+
+Bind it from the app, on the main thread:
+
+```kotlin
+val connection = object : ServiceConnection {
+    override fun onServiceConnected(name: ComponentName, binder: IBinder) {
+        val service = IMyService.Stub.asInterface(binder)
+        // call it off the main thread: service.exec("id")
+    }
+
+    override fun onServiceDisconnected(name: ComponentName) {}
+}
+
+ShellService.bind(Intent(context, MyService::class.java), connection)
+// …
+ShellService.unbind(connection)
+```
+
+No manifest entry: the `axsh` module brings its provider, and its ProGuard rules keep every
+`ShellService` subclass.
+
+**Same as libsu's RootService**: `onCreate`, `onBind`, `onUnbind`, `onRebind`, `onDestroy`,
+`stopSelf()`; `bind`, `unbind`, `stop`, main thread only; one process for all of an app's
+services (statics are shared), gone with the app.
+
+**Daemon mode**: bind with `intent.addCategory(ShellService.CATEGORY_DAEMON_MODE)` and return
+`true` from `onUnbind`. The service then runs in a second process that outlives the app; the next
+bind, even after the app restarts, reaches the same instance and calls `onRebind`.
+`ShellService.stop(intent)` ends it.
+
+**Also**:
+- The service's Context reports the uid's own package (`com.android.shell` in ADB mode), so
+  system services that check it (clipboard, AppOps) accept it.
+- `getApplicationContext()` returns the service itself: no `Application` runs there.
+- In a debuggable app, the process shows in Android Studio's *Attach Debugger* as
+  `<package>:shell_shared` or `<package>:shell_daemon`.
+- `ShellService.lastFailure(component)` says why a bind gave `onBindingDied` or `onNullBinding`.
+
+**Not (yet) like libsu**: no `bindOrTask`; user 0 only.
+
 ## demo-axsh
 
 A test bench for all of the above. Run it with AxManager's server running.
@@ -111,7 +191,12 @@ A test bench for all of the above. Run it with AxManager's server running.
   - shell: exit code, separate streams, stdin, large output, environment;
   - privileges: uid and SELinux context, `pm`, `settings`, `dumpsys`;
   - the **Test Function** plugin (`plugins/test_function` in AxManager): installed, `axtest` on
-    `PATH` and callable, not marked as a plugin process, its `system.prop`, its own reports.
+    `PATH` and callable, not marked as a plugin process, its `system.prop`, its own reports;
+  - libsu `RootService`, root mode only;
+  - `ShellService`: uid, `Runtime.exec` inside, two services in one process with a shared
+    static, the clipboard from its Context, `getApplicationContext()`;
+  - `ShellService` daemon: same pid across an unbind and across closing the app, a new one after
+    `stop`.
 - **Custom command**, through the selected runner.
 
 Compare *Latency* with the switch on and off, and with each runner, to see what each path costs.

@@ -145,6 +145,14 @@ private fun TestScreen(modifier: Modifier = Modifier) {
                     color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.padding(start = 4.dp, top = 12.dp),
                 )
+                sectionInfo[test.group]?.let { info ->
+                    Text(
+                        info,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 4.dp, bottom = 4.dp),
+                    )
+                }
             }
             TestCard(test, states[index], enabled = !runningAll) { run(index, scope) }
         }

@@ -10,6 +10,11 @@ import com.topjohnwu.superuser.ipc.RootService
 import frb.axeron.shell.ShellService
 import java.io.File
 
+// A static. Services in the same process see the same value.
+object SharedCounter {
+    var value = 0
+}
+
 // ============================================================================================
 // 1. The service. Everything inside runs in the service's own process, as uid 2000 (ADB mode)
 //    or uid 0 (root mode).
@@ -51,11 +56,16 @@ class UserService1 : ShellService() {
             override fun getApplicationContextName(): String {
                 return applicationContext?.toString() ?: "null"
             }
+
+            override fun incrementSharedCounter(): Int {
+                SharedCounter.value = SharedCounter.value + 1
+                return SharedCounter.value
+            }
         }
     }
 }
 
-// A second service, the very same code: it gets a process of its own.
+// A second service, the very same code. It runs in the same process as UserService1.
 class UserService2 : ShellService() {
 
     override fun onBind(intent: Intent): IBinder {
@@ -92,12 +102,18 @@ class UserService2 : ShellService() {
             override fun getApplicationContextName(): String {
                 return applicationContext?.toString() ?: "null"
             }
+
+            override fun incrementSharedCounter(): Int {
+                SharedCounter.value = SharedCounter.value + 1
+                return SharedCounter.value
+            }
         }
     }
 }
 
-// A daemon: onUnbind returns true, so its process keeps running after unbind, and even after
-// this app is closed. The next bind reaches the same process (same pid) and calls onRebind.
+// A daemon. Bound with an intent that has ShellService.CATEGORY_DAEMON_MODE, it runs in the
+// daemon process, which keeps running after this app is closed. onUnbind returns true, so the
+// service stays there too, and the next bind reaches it again and calls onRebind.
 class DaemonService : ShellService() {
 
     override fun onUnbind(intent: Intent): Boolean {
@@ -142,6 +158,11 @@ class DaemonService : ShellService() {
             override fun getApplicationContextName(): String {
                 return applicationContext?.toString() ?: "null"
             }
+
+            override fun incrementSharedCounter(): Int {
+                SharedCounter.value = SharedCounter.value + 1
+                return SharedCounter.value
+            }
         }
     }
 }
@@ -182,6 +203,11 @@ class RootUserService : RootService() {
 
             override fun getApplicationContextName(): String {
                 return applicationContext?.toString() ?: "null"
+            }
+
+            override fun incrementSharedCounter(): Int {
+                SharedCounter.value = SharedCounter.value + 1
+                return SharedCounter.value
             }
         }
     }

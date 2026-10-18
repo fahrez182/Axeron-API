@@ -21,6 +21,7 @@ import android.net.Uri
 import android.os.Binder
 import android.os.Build
 import android.os.Bundle
+import android.os.DeadObjectException
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
@@ -36,6 +37,8 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.Executor
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import java.util.concurrent.FutureTask
 import kotlin.concurrent.thread
 import kotlin.system.exitProcess
@@ -51,13 +54,13 @@ import kotlin.system.exitProcess
  * ShellService.unbind(connection)
  * ```
  *
- * Each service component runs in its own `app_process`, started through axsh ([setLauncher]),
- * so as the server's uid (shell or root), with this app's base.apk as its classpath. Its
- * [onCreate], [onBind], [onUnbind] and [onDestroy] run on that process's main thread; its
- * Context is this package's (user 0 only in this POC). Connections share one [onBind] binder;
- * when the last one unbinds the service is destroyed and its process exits, unless [onUnbind]
- * keeps it as a daemon. If the process dies, connections get onServiceDisconnected; if it never
- * comes up, onBindingDied.
+ * As RootService's, an app's services share one `app_process`, started through axsh
+ * ([setLauncher]) as the server's uid (shell or root) with this app's base.apk as classpath, and
+ * gone with the app. Those bound with [CATEGORY_DAEMON_MODE] share another, which outlives it.
+ * A process exits once it hosts no service. Each service's [onCreate], [onBind], [onUnbind],
+ * [onRebind] and [onDestroy] run on its process's main thread; its Context is this package's
+ * (user 0 only in this POC). Connections share one [onBind] binder. If the process dies,
+ * connections get onServiceDisconnected; if it never comes up, onBindingDied.
  *
  * Where RootService fails in ADB mode, this differs: it starts on any shell (libsu only from a
  * root one), its classpath is base.apk (not a jar in the app's private cache, which shell can't
@@ -71,9 +74,9 @@ abstract class ShellService : ContextWrapper(null) {
     abstract fun onBind(intent: Intent): IBinder
 
     /**
-     * The last connection is gone (unbound, or the app died). Return true to keep running as a
-     * daemon, as RootService's: the process outlives the app, and the next bind, from this app
-     * process or a later one, reaches it again through [onRebind]. False: [onDestroy], then exit.
+     * The last connection is gone (unbound, or the app died). True keeps this instance for the
+     * next bind, which calls [onRebind]; in the daemon process ([CATEGORY_DAEMON_MODE]) that bind
+     * may come from a later run of the app. False: [onDestroy].
      */
     open fun onUnbind(intent: Intent): Boolean = false
 
@@ -82,9 +85,9 @@ abstract class ShellService : ContextWrapper(null) {
 
     open fun onDestroy() {}
 
-    /** Ends this service: its process exits and every connection gets onServiceDisconnected. */
+    /** Ends this service: [onDestroy], and its connections get onServiceDisconnected. */
     fun stopSelf() {
-        ShellServiceRemote.destroy()
+        ShellServiceRemote.stopSelf(this)
     }
 
     internal fun attach(base: Context) = attachBaseContext(base)
@@ -103,6 +106,13 @@ abstract class ShellService : ContextWrapper(null) {
     }
 
     companion object {
+        /**
+         * An intent with this category binds its service in the daemon process, as libsu's
+         * RootService.CATEGORY_DAEMON_MODE: it outlives the app, so a service [onUnbind] keeps
+         * is there for the app's next run.
+         */
+        const val CATEGORY_DAEMON_MODE = "frb.axeron.shell.DAEMON_MODE"
+
         @JvmStatic
         fun bind(intent: Intent, connection: ServiceConnection) =
             ShellServiceClient.bind(intent, ShellServiceClient.mainExecutor, connection)
@@ -115,8 +125,8 @@ abstract class ShellService : ContextWrapper(null) {
         fun unbind(connection: ServiceConnection) = ShellServiceClient.unbind(connection)
 
         /**
-         * Stops the service whatever its connections; they get onServiceDisconnected. Also a
-         * daemon this app process isn't bound to (left by an earlier one).
+         * Stops the service whatever its connections; they get onServiceDisconnected. Also one
+         * in the daemon process this app process isn't bound to (left by an earlier run).
          */
         @JvmStatic
         fun stop(intent: Intent) = ShellServiceClient.stop(intent)
@@ -141,7 +151,10 @@ abstract class ShellService : ContextWrapper(null) {
 
 // ---- in the app ----
 
-/** The app side: one [Record] per service component, touched on the main thread only. */
+/**
+ * The app side: one [Proc] per process kind (shared, daemon), touched on the main thread; what is
+ * sent to a process goes through its [Proc.queue], in order.
+ */
 internal object ShellServiceClient {
     private const val TAG = "ShellService"
 
@@ -151,13 +164,27 @@ internal object ShellServiceClient {
     const val EXTRA_BINDER = "binder"
 
     // Transactions on a service process's control binder (ShellServiceRemote.Control).
+    /** class name, intent → binder, why there's none. */
     const val TRANSACTION_BIND = IBinder.FIRST_CALL_TRANSACTION
+
+    /** class name → whether the process now goes (it hosts nothing). */
     const val TRANSACTION_UNBIND = IBinder.FIRST_CALL_TRANSACTION + 1
+
+    /** As unbind, the service destroyed whatever its onUnbind. */
     const val TRANSACTION_STOP = IBinder.FIRST_CALL_TRANSACTION + 2
 
-    // What a service process is started for, on its stdin after the token.
+    /** Oneway: the process may exit (it said it goes). */
+    const val TRANSACTION_EXIT = IBinder.FIRST_CALL_TRANSACTION + 3
+
+    /** On the app's token, oneway from the process: class name, a service that stopped itself. */
+    const val TRANSACTION_SERVICE_GONE = IBinder.FIRST_CALL_TRANSACTION
+
+    // What a service process is started for: its stdin is the token, then one of these lines.
     const val ACTION_BIND = "bind"
-    const val ACTION_STOP = "stop"
+    const val ACTION_STOP = "stop" // + " <class>"
+
+    const val KIND_SHARED = "shared"
+    const val KIND_DAEMON = "daemon"
 
     private val main = Handler(Looper.getMainLooper())
     val mainExecutor = Executor { main.post(it) }
@@ -216,12 +243,31 @@ internal object ShellServiceClient {
         appContext = context.applicationContext ?: context
     }
 
-    private class Record(val component: ComponentName, val intent: Intent) {
-        val token: String = UUID.randomUUID().toString()
+    /** One service bound from this app process. */
+    private class Bound(val component: ComponentName, val intent: Intent, val retried: Boolean) {
         val connections = LinkedHashMap<ServiceConnection, Executor>()
+        var binder: IBinder? = null
+    }
 
-        /** Held by the service process: it dies with this app. */
-        val appToken = Binder()
+    /** One service process, as this app process knows it. */
+    private class Proc(val daemon: Boolean) {
+        val token: String = UUID.randomUUID().toString()
+
+        /** By component; main thread. */
+        val bound = HashMap<ComponentName, Bound>()
+
+        /** What is sent to the process, one at a time, off the main thread. */
+        val queue: ExecutorService = Executors.newSingleThreadExecutor { Thread(it, "shell-service-ops").apply { isDaemon = true } }
+
+        /** Held by the process: it learns of this app process's death, and tells it of stopSelf. */
+        val appToken: IBinder = object : Binder() {
+            override fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
+                if (code != TRANSACTION_SERVICE_GONE) return super.onTransact(code, data, reply, flags)
+                val className = data.readString() ?: return true
+                main.post { serviceGone(this@Proc, className) }
+                return true
+            }
+        }
 
         @Volatile
         var process: java.lang.Process? = null
@@ -229,180 +275,251 @@ internal object ShellServiceClient {
         @Volatile
         var control: IBinder? = null
 
-        var service: IBinder? = null
+        /** It said it goes, or died: nothing more is sent, later binds go to a new process. */
+        @Volatile
+        var exiting = false
 
-        /** What the process wrote to stderr lately, for when it never connects. */
+        /** What the launch wrote to stderr lately, for when it never connects. */
         val stderr = ArrayDeque<String>()
     }
 
-    private val records = HashMap<ComponentName, Record>()
+    private val procs = HashMap<Boolean, Proc>()
 
     /** Why each component's last bind ended in onNullBinding / onBindingDied. */
     val failures = ConcurrentHashMap<ComponentName, String>()
 
-    /** Records waiting for their process to hand in its control binder; read from the provider. */
-    private val starting = ConcurrentHashMap<String, Record>()
+    /** Processes waiting to hand in their control binder; read from the provider. */
+    private val starting = ConcurrentHashMap<String, Proc>()
+
+    private fun isDaemon(intent: Intent) = intent.hasCategory(ShellService.CATEGORY_DAEMON_MODE)
 
     fun bind(intent: Intent, executor: Executor, connection: ServiceConnection) {
         checkMainThread()
+        bind(intent, executor, connection, retried = false)
+    }
+
+    private fun bind(intent: Intent, executor: Executor, connection: ServiceConnection, retried: Boolean) {
         val component = requireNotNull(intent.component) { "the intent has no component" }
         require(component.packageName == context.packageName) {
             "ShellServices outside of this app are not supported"
         }
-        val record = records.getOrPut(component) { Record(component, Intent(intent)).also(::start) }
-        record.connections[connection] = executor
-        record.service?.let { service -> executor.execute { connection.onServiceConnected(component, service) } }
+        val proc = procs.getOrPut(isDaemon(intent)) { Proc(isDaemon(intent)).also(::start) }
+        val bound = proc.bound.getOrPut(component) {
+            failures.remove(component)
+            Bound(component, Intent(intent), retried).also { if (proc.control != null) sendBind(proc, it) }
+        }
+        bound.connections[connection] = executor
+        bound.binder?.let { service -> executor.execute { connection.onServiceConnected(component, service) } }
     }
 
     fun unbind(connection: ServiceConnection) {
         checkMainThread()
-        val record = records.values.firstOrNull { connection in it.connections } ?: return
-        record.connections.remove(connection)
-        if (record.connections.isEmpty()) end(record, TRANSACTION_UNBIND)
+        for (proc in procs.values) {
+            val bound = proc.bound.values.firstOrNull { connection in it.connections } ?: continue
+            bound.connections.remove(connection)
+            if (bound.connections.isEmpty()) {
+                proc.bound.remove(bound.component)
+                end(proc, TRANSACTION_UNBIND, bound.component.className)
+            }
+            return
+        }
     }
 
     fun stop(intent: Intent) {
         checkMainThread()
         val component = intent.component ?: return
-        val record = records[component] ?: run {
-            // Not bound here: a daemon may still run. A process asks it to stop and exits.
+        val daemon = isDaemon(intent)
+        val proc = procs[daemon]
+        proc?.bound?.remove(component)?.let { bound ->
+            if (bound.binder != null) {
+                bound.connections.forEach { (conn, executor) -> executor.execute { conn.onServiceDisconnected(component) } }
+            }
+        }
+        if (proc?.control != null) {
+            end(proc, TRANSACTION_STOP, component.className)
+        } else if (daemon) {
+            // Not connected to the daemon process here: one may still run. A launch asks it.
             thread(name = "shell-service-stop") {
                 runCatching {
-                    val process = launcher.launch(argv(component))
-                    process.outputStream.use { it.write("\n$ACTION_STOP\n".toByteArray()) }
+                    val process = launcher.launch(argv(daemon = true))
+                    process.outputStream.use { it.write("\n$ACTION_STOP ${component.className}\n".toByteArray()) }
                     process.waitFor()
                 }.onFailure { Log.w(TAG, "can't stop ${component.className}", it) }
             }
-            return
-        }
-        val connections = record.connections.toList()
-        record.connections.clear()
-        end(record, TRANSACTION_STOP)
-        if (record.service != null) {
-            connections.forEach { (conn, executor) -> executor.execute { conn.onServiceDisconnected(record.component) } }
         }
     }
 
-    /** Asks the process to go ([code]: unbind or stop), or kills it if it can't be asked yet. */
-    private fun end(record: Record, code: Int) {
-        records.remove(record.component)
-        starting.remove(record.token)
-        thread(name = "shell-service-end") {
-            val asked = record.control?.let { control ->
-                runCatching { transact(control, code, oneway = true) {} }.isSuccess
-            } ?: false
-            if (!asked) record.process?.destroy()
+    /** Unbind or stop ([code]) [className] in [proc]; the process may then go. */
+    private fun end(proc: Proc, code: Int, className: String) = proc.queue.execute {
+        if (proc.exiting) return@execute
+        val control = proc.control ?: return@execute
+        val goes = try {
+            var goes = false
+            transact(control, code, oneway = false, write = { it.writeString(className) }) { goes = it.readInt() != 0 }
+            goes
+        } catch (_: Exception) {
+            true // dead: its death notice does the rest
         }
+        if (goes) retire(proc)
+    }
+
+    /** On [proc]'s queue: it goes. Let it exit; what is bound to it meanwhile moves on. */
+    private fun retire(proc: Proc) {
+        proc.exiting = true
+        proc.control?.let { control -> runCatching { transact(control, TRANSACTION_EXIT, oneway = true) {} } }
+        main.post { drop(proc, died = false) }
+    }
+
+    private fun sendBind(proc: Proc, bound: Bound) = proc.queue.execute {
+        // A bind sent here after the process said it goes: drop() moves it to the next one.
+        if (proc.exiting) return@execute
+        val control = proc.control ?: return@execute
+        var binder: IBinder? = null
+        var error: String? = null
+        try {
+            transact(control, TRANSACTION_BIND, oneway = false, write = {
+                it.writeString(bound.component.className)
+                bound.intent.writeToParcel(it, 0)
+            }) {
+                // Throws what the process's onTransact threw outside its own catch.
+                it.readException()
+                binder = it.readStrongBinder()
+                error = it.readString()
+                if (binder == null && error == null) error = "empty reply (${it.dataSize()} bytes)"
+            }
+        } catch (_: DeadObjectException) {
+            // It exited under us (its last service stopped itself): the next process takes it.
+            retire(proc)
+            return@execute
+        } catch (e: Exception) {
+            error = "bind transaction failed: ${Log.getStackTraceString(e)}"
+        }
+        main.post { connected(proc, bound, binder, error) }
     }
 
     /**
-     * The service process's command line. Under `sh`, not exec'd: the server kills a shell's whole
+     * The argv of a service process. Under `sh`, not exec'd: the server kills a shell's whole
      * process group when the app dies, and only a process that doesn't lead its group can leave it
-     * (setsid) to stay on as a daemon. `; exit $?` so sh can't exec its last command either.
+     * (setsid) to stay on as the daemon. `; exit $?` so sh can't exec its last command either.
      */
-    private fun argv(component: ComponentName): Array<String> {
+    private fun argv(daemon: Boolean): Array<String> {
         val app = context
         val debuggable = app.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
+        val kind = if (daemon) KIND_DAEMON else KIND_SHARED
         return arrayOf(
             "/system/bin/sh", "-c", "\"\$@\"; exit \$?", "shellservice",
             "/system/bin/app_process",
             "-Djava.class.path=${app.applicationInfo.sourceDir}",
             *(if (debuggable) DEBUG_ARGS else emptyArray()),
             "/system/bin",
-            "--nice-name=${app.packageName}:shell_service",
+            "--nice-name=${app.packageName}:shell_$kind",
             ShellServiceRemote::class.java.name,
-            app.packageName, component.className,
+            app.packageName, kind,
         )
     }
 
-    private fun start(record: Record) {
-        failures.remove(record.component)
-        starting[record.token] = record
-        val argv = argv(record.component)
+    private fun start(proc: Proc) {
+        starting[proc.token] = proc
+        val argv = argv(proc.daemon)
         // The launcher may block (binder, AxManager's permission dialog): not on the main thread.
         thread(name = "shell-service-start") {
             val process = try {
                 launcher.launch(argv)
             } catch (e: Throwable) {
-                Log.e(TAG, "can't start ${record.component.className}", e)
-                main.post { gone(record) }
+                Log.e(TAG, "can't start a service process", e)
+                main.post { drop(proc, died = true) }
                 return@thread
             }
-            record.process = process
+            proc.process = process
             // On stdin, not argv: any process of the server's uid can read /proc/<pid>/cmdline,
             // and with the token it could hand us its own binder first.
-            runCatching { process.outputStream.use { it.write("${record.token}\n$ACTION_BIND\n".toByteArray()) } }
+            runCatching { process.outputStream.use { it.write("${proc.token}\n$ACTION_BIND\n".toByteArray()) } }
             thread(name = "shell-service-err", isDaemon = true) {
                 runCatching {
                     process.errorStream.bufferedReader().forEachLine { line ->
                         Log.w(TAG, line)
-                        synchronized(record.stderr) {
-                            record.stderr.addLast(line)
-                            if (record.stderr.size > 20) record.stderr.removeFirst()
+                        synchronized(proc.stderr) {
+                            proc.stderr.addLast(line)
+                            if (proc.stderr.size > 20) proc.stderr.removeFirst()
                         }
                     }
                 }
             }
             val code = process.waitFor()
-            Log.i(TAG, "${record.component.className}'s launch exited with $code")
-            // Once its control binder is in, that binder's death says when the service is gone:
-            // a daemon handed over by this process outlives it.
-            main.post { if (record.control == null) gone(record) }
+            Log.i(TAG, "service process launch exited with $code")
+            // Once its control binder is in, that binder's death says when the process is gone:
+            // the daemon, found running by this launch, outlives it.
+            main.post { if (proc.control == null) drop(proc, died = true) }
         }
     }
 
     /** From [ShellServiceProvider], on a binder thread: the process with [token] is up. */
     fun attach(token: String, control: IBinder): IBinder? {
-        val record = starting.remove(token) ?: return null
-        record.control = control
-        runCatching { control.linkToDeath({ main.post { gone(record) } }, 0) }
-        // Not here: the process's main thread is still waiting on this very call.
-        thread(name = "shell-service-bind") {
-            var binder: IBinder? = null
-            var error: String? = null
-            runCatching {
-                transact(control, TRANSACTION_BIND, oneway = false, write = { record.intent.writeToParcel(it, 0) }) {
-                    // Throws what the process's onTransact threw outside its own catch.
-                    it.readException()
-                    binder = it.readStrongBinder()
-                    error = it.readString()
-                    if (binder == null && error == null) error = "empty reply (${it.dataSize()} bytes)"
-                }
-            }.onFailure { error = "bind transaction failed: ${Log.getStackTraceString(it)}" }
-            main.post { connected(record, binder, error) }
+        val proc = starting.remove(token) ?: return null
+        proc.control = control
+        runCatching { control.linkToDeath({ main.post { drop(proc, died = true) } }, 0) }
+        // Not here: the process's main thread may still be waiting on this very call.
+        main.post {
+            if (proc.exiting) return@post
+            proc.bound.values.forEach { sendBind(proc, it) }
+            // Unbound before it came up: a new shared process has nothing to do. The daemon may
+            // host services kept from before: it stays.
+            if (proc.bound.isEmpty() && !proc.daemon) proc.queue.execute { retire(proc) }
         }
-        return record.appToken
+        return proc.appToken
     }
 
-    private fun connected(record: Record, service: IBinder?, error: String?) {
-        if (records[record.component] !== record) return // unbound or stopped meanwhile
+    private fun connected(proc: Proc, bound: Bound, service: IBinder?, error: String?) {
+        if (proc.bound[bound.component] !== bound) return // unbound or stopped meanwhile
         if (service == null) {
             // onBind failed or returned nothing (onNullBinding is API 28+).
-            failures[record.component] = error ?: "no binder"
-            Log.e(TAG, "${record.component.className}: no binder: $error")
+            failures[bound.component] = error ?: "no binder"
+            Log.e(TAG, "${bound.component.className}: no binder: $error")
             if (Build.VERSION.SDK_INT >= 28) {
-                record.connections.forEach { (conn, executor) -> executor.execute { conn.onNullBinding(record.component) } }
+                bound.connections.forEach { (conn, executor) -> executor.execute { conn.onNullBinding(bound.component) } }
             }
             return
         }
-        record.service = service
-        record.connections.forEach { (conn, executor) ->
-            executor.execute { conn.onServiceConnected(record.component, service) }
+        bound.binder = service
+        bound.connections.forEach { (conn, executor) -> executor.execute { conn.onServiceConnected(bound.component, service) } }
+    }
+
+    /** A service called stopSelf. */
+    private fun serviceGone(proc: Proc, className: String) {
+        val bound = proc.bound.values.firstOrNull { it.component.className == className } ?: return
+        proc.bound.remove(bound.component)
+        if (bound.binder != null) {
+            bound.connections.forEach { (conn, executor) -> executor.execute { conn.onServiceDisconnected(bound.component) } }
         }
     }
 
-    /** The process is gone (or never came up). */
-    private fun gone(record: Record) {
-        starting.remove(record.token)
-        if (records[record.component] !== record) return
-        records.remove(record.component)
-        if (record.service != null) {
-            record.connections.forEach { (conn, executor) -> executor.execute { conn.onServiceDisconnected(record.component) } }
-        } else {
-            val tail = synchronized(record.stderr) { record.stderr.joinToString("\n") }
-            failures[record.component] = "its process never connected" + if (tail.isEmpty()) "" else ":\n$tail"
-            Log.e(TAG, "${record.component.className} never connected" + if (tail.isEmpty()) "" else ":\n$tail")
-            record.connections.forEach { (conn, executor) -> executor.execute { conn.onBindingDied(record.component) } }
+    /**
+     * [proc] is gone ([died]) or going. Connected services are disconnected; binds still waiting
+     * move to a new process once, unless it never came up: then onBindingDied.
+     */
+    private fun drop(proc: Proc, died: Boolean) {
+        proc.exiting = true
+        starting.remove(proc.token)
+        if (procs[proc.daemon] === proc) procs.remove(proc.daemon)
+        proc.queue.shutdown()
+        val all = proc.bound.values.toList()
+        proc.bound.clear()
+        val tail = synchronized(proc.stderr) { proc.stderr.joinToString("\n") }
+        for (bound in all) {
+            when {
+                bound.binder != null -> bound.connections.forEach { (conn, executor) ->
+                    executor.execute { conn.onServiceDisconnected(bound.component) }
+                }
+                proc.control != null && !bound.retried -> bound.connections.forEach { (conn, executor) ->
+                    bind(bound.intent, executor, conn, retried = true)
+                }
+                else -> {
+                    val why = if (died && proc.control == null) "its process never connected" else "its process went"
+                    failures[bound.component] = why + if (tail.isEmpty()) "" else ":\n$tail"
+                    Log.e(TAG, "${bound.component.className}: $why" + if (tail.isEmpty()) "" else ":\n$tail")
+                    bound.connections.forEach { (conn, executor) -> executor.execute { conn.onBindingDied(bound.component) } }
+                }
+            }
         }
     }
 
@@ -463,8 +580,8 @@ class ShellServiceProvider : ContentProvider() {
 // ---- in the service's process ----
 
 /**
- * The `app_process` entry: `<package> <service class>`; on stdin the token, then what for
- * (bind or stop). Runs as the server's uid.
+ * The `app_process` entry: `<package> <shared|daemon>`; on stdin the token, then `bind` or
+ * `stop <class>`. Runs as the server's uid and hosts the app's services of that kind.
  */
 internal object ShellServiceRemote {
     private const val TAG = "ShellService"
@@ -472,45 +589,72 @@ internal object ShellServiceRemote {
     private val main by lazy { Handler(Looper.getMainLooper()) }
 
     private lateinit var packageName: String
-    private lateinit var className: String
-    private var service: ShellService? = null
-    private var binder: IBinder? = null
-    private var intent: Intent? = null
+    private var daemon = false
+
+    /** A service this process hosts; [boundBy] the app process bound to it, null while kept unbound. */
+    private class Hosted(val service: ShellService) {
+        var binder: IBinder? = null
+        var intent: Intent? = null
+        var boundBy: IBinder? = null
+    }
+
+    /** By class name; main thread. */
+    private val hosted = HashMap<String, Hosted>()
 
     /** One for every app process we serve: the app links to its death. */
     private val control by lazy { Control() }
 
-    /** The app process we serve now; null while none is bound (a daemon between binds). */
-    private var appToken: IBinder? = null
+    /** The app process we serve now (the daemon serves each run of the app in turn). */
+    @Volatile
+    private var app: IBinder? = null
 
-    /** [ShellService.onUnbind] kept us: the next bind gets [ShellService.onRebind]. */
-    private var unbound = false
-
-    private var daemon = false
+    /** Told the app it goes: no more binds. */
+    @Volatile
+    private var exiting = false
 
     private val authority get() = packageName + ShellServiceClient.AUTHORITY_SUFFIX
 
-    /** Where a daemon of this service waits for the next bind (abstract, per uid). */
-    private val socketName get() = "shellservice.${Os.getuid()}.$packageName/$className"
+    /** Where the daemon waits for the app's next runs (abstract, per uid and package). */
+    private val socketName get() = "shellservice.${Os.getuid()}.$packageName"
+
+    /** All services share it: this package's, with the uid's own op package. Main thread. */
+    private val packageContext: Context by lazy {
+        // As Context: the stub's getSystemContext returns ContextImpl, package-private on
+        // devices, and calling through it there is an IllegalAccessError.
+        val thread = ActivityThread.systemMain()
+        val system: Context = thread.systemContext
+        withUidOpPackage(
+            thread, system,
+            system.createPackageContext(packageName, Context.CONTEXT_INCLUDE_CODE or Context.CONTEXT_IGNORE_SECURITY),
+        )
+    }
 
     @JvmStatic
     fun main(args: Array<String>) {
         val stdin = System.`in`.bufferedReader()
         val token = stdin.readLine().orEmpty()
         val action = stdin.readLine() ?: ShellServiceClient.ACTION_BIND
-        if (args.size < 2 || (token.isEmpty() && action == ShellServiceClient.ACTION_BIND)) {
-            System.err.println("shellservice: usage: <package> <class>, the token and bind|stop on stdin")
+        if (args.size < 2) {
+            System.err.println("shellservice: usage: <package> <shared|daemon>, the token and an action on stdin")
             exitProcess(2)
         }
         packageName = args[0]
-        className = args[1]
+        daemon = args[1] == ShellServiceClient.KIND_DAEMON
+        val stopping = action.startsWith(ShellServiceClient.ACTION_STOP)
 
-        // A daemon of this service already runs: it takes the bind (or stop) itself.
-        handOver(action, token)?.let { exitProcess(it) }
-        if (action == ShellServiceClient.ACTION_STOP) exitProcess(0) // nothing to stop
+        // The daemon already runs: it takes the bind (or stop) itself.
+        if (daemon) {
+            val line = if (stopping) action else "${ShellServiceClient.ACTION_BIND} $token"
+            handOver(line)?.let { exitProcess(it) }
+        }
+        if (stopping) exitProcess(0) // nothing to stop
+        if (token.isEmpty()) {
+            System.err.println("shellservice: no token on stdin")
+            exitProcess(2)
+        }
 
         // The name Studio's debugger and Logcat list this process under.
-        runCatching { DdmHandleAppName.setAppName("$packageName:${className.substringAfterLast('.')}", 0) }
+        runCatching { DdmHandleAppName.setAppName("$packageName:shell_${args[1]}", 0) }
         Looper.prepareMainLooper()
 
         val app = try {
@@ -522,15 +666,16 @@ internal object ShellServiceRemote {
             System.err.println("shellservice: $packageName refused us (uid ${Os.getuid()})")
             exitProcess(1)
         }
+        if (daemon) becomeDaemon()
         serve(app)
         Looper.loop()
     }
 
     /**
-     * Passes [action] to this service's daemon, if one listens: the exit code then, null without
-     * one. For a bind the daemon hands its control binder to the app with [token] itself.
+     * Passes [line] (`bind <token>` or `stop <class>`) to the running daemon: the exit code
+     * then, null when none runs or it is going.
      */
-    private fun handOver(action: String, token: String): Int? {
+    private fun handOver(line: String): Int? {
         val socket = LocalSocket()
         try {
             socket.connect(LocalSocketAddress(socketName))
@@ -539,50 +684,163 @@ internal object ShellServiceRemote {
             return null
         }
         return socket.use {
-            it.outputStream.write("$action $token\n".toByteArray())
-            val reply = it.inputStream.bufferedReader().readLine()
-            if (reply == "ok") 0 else {
-                System.err.println("shellservice: the running daemon said: $reply")
-                1
+            it.outputStream.write("$line\n".toByteArray())
+            when (val reply = it.inputStream.bufferedReader().readLine()) {
+                "ok" -> 0
+                null, "exiting" -> null
+                else -> {
+                    System.err.println("shellservice: the running daemon said: $reply")
+                    1
+                }
             }
         }
     }
 
-    /** [app] is the app process we serve now; when it dies, it unbinds us. */
+    /** [app] is the app process we serve now; when it dies, it unbinds what it bound. */
     private fun serve(app: IBinder) {
-        appToken = app
-        runCatching {
-            app.linkToDeath({ main.post { if (appToken === app) unbind() } }, 0)
-        }.onFailure { main.post { if (appToken === app) unbind() } }
+        this.app = app
+        try {
+            app.linkToDeath({ main.post { appDied(app) } }, 0)
+        } catch (_: Exception) {
+            main.post { appDied(app) }
+        }
     }
 
-    /** Created on the first bind: the class from our classpath (base.apk), this package's Context. */
-    private fun bindOnMain(intent: Intent): IBinder? {
-        binder?.let { existing ->
-            if (unbound) {
-                unbound = false
-                service?.onRebind(intent)
-            }
-            this.intent = intent
-            return existing
+    private fun appDied(dead: IBinder) {
+        if (app === dead) app = null
+        if (!daemon) {
+            // The shared process goes with the app.
+            hosted.keys.toList().forEach { destroy(it) }
+            exitProcess(0)
         }
-        val created = service ?: run {
-            // As Context: the stub's getSystemContext returns ContextImpl, package-private on
-            // devices, and calling through it there is an IllegalAccessError.
-            val thread = ActivityThread.systemMain()
-            val system: Context = thread.systemContext
-            val context = withUidOpPackage(
-                thread, system,
-                system.createPackageContext(packageName, Context.CONTEXT_INCLUDE_CODE or Context.CONTEXT_IGNORE_SECURITY),
-            )
-            (Class.forName(className).getDeclaredConstructor().newInstance() as ShellService).also {
-                it.attach(context)
-                service = it
-                it.onCreate()
+        hosted.filterValues { it.boundBy === dead }.keys.forEach { unbind(it) }
+        if (hosted.isEmpty()) exitProcess(0)
+    }
+
+    /** First bind: the class from our classpath (base.apk), [packageContext]. */
+    private fun bindOnMain(className: String, intent: Intent): IBinder? {
+        check(!exiting) { "the service process is exiting" }
+        val entry = hosted[className] ?: run {
+            val service = Class.forName(className).getDeclaredConstructor().newInstance() as ShellService
+            service.attach(packageContext)
+            Hosted(service).also {
+                hosted[className] = it
+                service.onCreate()
             }
         }
-        this.intent = intent
-        return created.onBind(intent).also { binder = it }
+        val binder = entry.binder
+        if (binder == null) {
+            val made = try {
+                entry.service.onBind(intent)
+            } catch (e: Throwable) {
+                destroy(className)
+                throw e
+            }
+            entry.binder = made
+        } else if (entry.boundBy == null) {
+            entry.service.onRebind(intent)
+        }
+        entry.intent = intent
+        entry.boundBy = app
+        return entry.binder
+    }
+
+    /** No connection left: [ShellService.onUnbind] decides whether it stays. */
+    private fun unbind(className: String) {
+        val entry = hosted[className] ?: return
+        entry.boundBy = null
+        val keep = entry.intent?.let { runCatching { entry.service.onUnbind(it) }.getOrDefault(false) } ?: false
+        if (!keep) destroy(className)
+    }
+
+    private fun destroy(className: String) {
+        val entry = hosted.remove(className) ?: return
+        runCatching { entry.service.onDestroy() }
+    }
+
+    /** After an unbind or stop: whether this process now goes, told to the app. */
+    private fun goes(): Boolean {
+        if (hosted.isEmpty()) exiting = true
+        return exiting
+    }
+
+    fun stopSelf(service: ShellService) {
+        main.post {
+            val className = hosted.entries.firstOrNull { it.value.service === service }?.key ?: return@post
+            destroy(className)
+            app?.let { app ->
+                runCatching {
+                    val data = Parcel.obtain()
+                    try {
+                        data.writeString(className)
+                        app.transact(ShellServiceClient.TRANSACTION_SERVICE_GONE, data, null, IBinder.FLAG_ONEWAY)
+                    } finally {
+                        data.recycle()
+                    }
+                }
+            }
+            if (hosted.isEmpty()) exitProcess(0)
+        }
+    }
+
+    /**
+     * Stays on without the app: out of the shell's process group, which the server kills with the
+     * app; stdio to /dev/null, as the pipes to the app break; then waits on [socketName].
+     */
+    private fun becomeDaemon() {
+        try {
+            Os.setsid()
+        } catch (e: ErrnoException) {
+            Log.w(TAG, "can't leave the shell's process group, the daemon dies with the app: $e")
+        }
+        runCatching {
+            val devNull = Os.open("/dev/null", OsConstants.O_RDWR, 0)
+            Os.dup2(devNull, 0)
+            Os.dup2(devNull, 1)
+            Os.dup2(devNull, 2)
+            Os.close(devNull)
+        }
+        val server = try {
+            LocalServerSocket(socketName)
+        } catch (e: IOException) {
+            Log.w(TAG, "no daemon socket, the app's next run starts a new daemon: $e")
+            return
+        }
+        Log.i(TAG, "$packageName's daemon process, pid ${Os.getpid()}")
+        thread(name = "shell-service-daemon", isDaemon = true) {
+            while (true) {
+                val client = runCatching { server.accept() }.getOrNull() ?: break
+                thread(name = "shell-service-handover", isDaemon = true) { takeOver(client) }
+            }
+        }
+    }
+
+    /** A launch for a later run of the app found us: `bind <token>` or `stop <class>`. */
+    private fun takeOver(client: LocalSocket) = client.use {
+        // Same uid only: the server's, as the launch that found us.
+        if (it.peerCredentials.uid != Os.getuid()) return
+        val line = it.inputStream.bufferedReader().readLine() ?: return
+        val action = line.substringBefore(' ')
+        val arg = line.substringAfter(' ', "")
+        val reply = when {
+            exiting -> "exiting"
+            action == ShellServiceClient.ACTION_STOP -> {
+                onMain {
+                    destroy(arg)
+                    if (hosted.isEmpty()) main.post { exitProcess(0) }
+                }
+                "ok"
+            }
+            action == ShellServiceClient.ACTION_BIND -> {
+                val app = runCatching { sendControl(authority, arg, control) }.getOrNull()
+                if (app == null) "refused by $packageName" else {
+                    main.post { serve(app) }
+                    "ok"
+                }
+            }
+            else -> "unknown action $action"
+        }
+        it.outputStream.write("$reply\n".toByteArray())
     }
 
     /**
@@ -613,80 +871,6 @@ internal object ShellServiceRemote {
         }
     }
 
-    /** The app unbound, or died: [ShellService.onUnbind] decides whether we stay. On main. */
-    private fun unbind() {
-        appToken = null
-        val svc = service
-        val last = intent
-        if (svc == null || last == null) exitProcess(0) // never bound: nothing to keep
-        val keep = runCatching { svc.onUnbind(last) }.getOrDefault(false)
-        if (!keep) destroy()
-        unbound = true
-        if (!daemon) becomeDaemon()
-    }
-
-    /**
-     * Stays on without the app: out of the shell's process group, which the server kills with the
-     * app; stdio to /dev/null, as the pipes to the app break; then waits on [socketName].
-     */
-    private fun becomeDaemon() {
-        daemon = true
-        try {
-            Os.setsid()
-        } catch (e: ErrnoException) {
-            Log.w(TAG, "$className can't leave the shell's process group, it dies with the app: $e")
-        }
-        runCatching {
-            val devNull = Os.open("/dev/null", OsConstants.O_RDWR, 0)
-            Os.dup2(devNull, 0)
-            Os.dup2(devNull, 1)
-            Os.dup2(devNull, 2)
-            Os.close(devNull)
-        }
-        val server = try {
-            LocalServerSocket(socketName)
-        } catch (e: IOException) {
-            Log.w(TAG, "$className: no daemon socket, binds will start a new process: $e")
-            return
-        }
-        Log.i(TAG, "$className stays on as a daemon, pid ${Os.getpid()}")
-        thread(name = "shell-service-daemon", isDaemon = true) {
-            while (true) {
-                val client = runCatching { server.accept() }.getOrNull() ?: break
-                thread(name = "shell-service-handover", isDaemon = true) { takeOver(client) }
-            }
-        }
-    }
-
-    /** A new launch of this service found us: `bind <token>` or `stop`. */
-    private fun takeOver(client: LocalSocket) = client.use {
-        // Same uid only: the server's, as the launch that found us.
-        if (it.peerCredentials.uid != Os.getuid()) return
-        val line = it.inputStream.bufferedReader().readLine() ?: return
-        val action = line.substringBefore(' ')
-        val reply = when (action) {
-            ShellServiceClient.ACTION_STOP -> {
-                main.post { destroy() }
-                "ok"
-            }
-            ShellServiceClient.ACTION_BIND -> {
-                val app = runCatching { sendControl(authority, line.substringAfter(' '), control) }.getOrNull()
-                if (app == null) "refused by $packageName" else {
-                    main.post { serve(app) }
-                    "ok"
-                }
-            }
-            else -> "unknown action $action"
-        }
-        it.outputStream.write("$reply\n".toByteArray())
-    }
-
-    /** Destroys the service and exits. */
-    fun destroy(): Nothing {
-        service?.let { runCatching { it.onDestroy() } }
-        exitProcess(0)
-    }
-
     private fun <T> onMain(block: () -> T): T {
         if (Looper.myLooper() == Looper.getMainLooper()) return block()
         val task = FutureTask(block)
@@ -694,13 +878,14 @@ internal object ShellServiceRemote {
         return task.get()
     }
 
-    /** What the app calls once we're up: bind, unbind, stop. */
+    /** What the app calls once we're up: bind, unbind, stop, exit. */
     private class Control : Binder() {
         override fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean = when (code) {
             ShellServiceClient.TRANSACTION_BIND -> {
                 val result = runCatching {
+                    val className = requireNotNull(data.readString()) { "no class name" }
                     val intent = Intent.CREATOR.createFromParcel(data)
-                    onMain { bindOnMain(intent) }
+                    onMain { bindOnMain(className, intent) }
                 }
                 val error = result.exceptionOrNull()?.let { e ->
                     Log.getStackTraceString((e as? ExecutionException)?.cause ?: e)
@@ -712,12 +897,20 @@ internal object ShellServiceRemote {
                 reply?.writeString(error ?: if (result.getOrNull() == null) "onBind returned null" else null)
                 true
             }
-            ShellServiceClient.TRANSACTION_UNBIND -> {
-                main.post { unbind() }
+            ShellServiceClient.TRANSACTION_UNBIND, ShellServiceClient.TRANSACTION_STOP -> {
+                val className = data.readString().orEmpty()
+                val goes = onMain {
+                    if (code == ShellServiceClient.TRANSACTION_STOP) destroy(className) else unbind(className)
+                    goes()
+                }
+                reply?.writeInt(if (goes) 1 else 0)
                 true
             }
-            ShellServiceClient.TRANSACTION_STOP -> {
-                main.post { destroy() }
+            ShellServiceClient.TRANSACTION_EXIT -> {
+                main.post {
+                    hosted.keys.toList().forEach { destroy(it) }
+                    exitProcess(0)
+                }
                 true
             }
             else -> super.onTransact(code, data, reply, flags)

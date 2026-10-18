@@ -20,4 +20,7 @@ interface IUserService {
 
     // The service's getApplicationContext(), as a string ("null" when there is none).
     String getApplicationContextName();
+
+    // Adds 1 to SharedCounter.value, a static in the service's process, and returns it.
+    int incrementSharedCounter();
 }

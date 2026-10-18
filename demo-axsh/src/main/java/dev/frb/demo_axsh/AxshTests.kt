@@ -41,7 +41,19 @@ private const val SHELL = "Shell"
 private const val PRIVILEGES = "Privileges"
 private const val TEST_FUNCTION = "Test Function plugin"
 private const val ROOT_SERVICE = "libsu RootService"
-private const val SHELL_SERVICE = "ShellService (POC)"
+private const val SHELL_SERVICE = "ShellService"
+private const val SHELL_SERVICE_DAEMON = "ShellService daemon"
+
+/** One line under each section's title. */
+val sectionInfo: Map<String, String> = mapOf(
+    CONNECTION to "How this app reaches AxManager's server through axsh.",
+    SHELL to "Exit code, streams, stdin and env of an axsh shell.",
+    PRIVILEGES to "What the shell can do and the app can't. uid 2000: ADB mode, 0: root.",
+    TEST_FUNCTION to "Needs the test_function plugin installed in AxManager.",
+    ROOT_SERVICE to "libsu's own RootService, to compare. Root mode only.",
+    SHELL_SERVICE to "RootService's API on axsh, in ADB mode too. UserService1 and 2 share one process.",
+    SHELL_SERVICE_DAEMON to "Bound with CATEGORY_DAEMON_MODE: a process that outlives the app.",
+)
 
 // The plugin's folder, as its scripts see it ($MODDIR).
 private const val PLUGIN = "\$AXERONDIR/plugins/test_function"
@@ -50,15 +62,14 @@ private val mainTests: List<AxshTest> = listOf(
     // ---- connection ----
     AxshTest(
         CONNECTION, "Reach the server",
-        "axsh -c id. The first run may wait on AxManager's permission dialog (up to 15 s)."
+        "Runs `id`. The first run may show AxManager's permission dialog."
     ) {
         val r = sh("id")
         if (r.ok) pass(r.out, r.dump()) else fail(r.why(), r.dump())
     },
     AxshTest(
         CONNECTION, "Latency",
-        "Five runs of `true`. Per command, each is a session; compare direct connection on and off. " +
-                "libsu: only a first run without a cached shell pays for one."
+        "5× `true`. Compare direct connection on and off."
     ) {
         val runs = List(5) { sh("true") }
         val bad = runs.firstOrNull { !it.ok }
@@ -71,8 +82,7 @@ private val mainTests: List<AxshTest> = listOf(
     },
     AxshTest(
         CONNECTION, "Concurrent commands",
-        "Four at once. Per command: four axsh sessions, four shells. libsu: one cached shell, so " +
-                "they queue and share its pid."
+        "4 commands at once. Per command: 4 shells. libsu: 1 shared shell."
     ) {
         val pool = Executors.newFixedThreadPool(4)
         val results = try {
@@ -93,7 +103,7 @@ private val mainTests: List<AxshTest> = listOf(
     },
     AxshTest(
         CONNECTION, "Shell state stays apart",
-        "`cd` and a variable in one command must not leak into the next, in either runner."
+        "`cd` and variables don't carry over to the next command."
     ) {
         sh("cd /system; LEAK=1")
         val r = sh("echo \"\$PWD \${LEAK:-unset}\"")
@@ -105,36 +115,36 @@ private val mainTests: List<AxshTest> = listOf(
     },
 
     // ---- shell ----
-    AxshTest(SHELL, "Exit code", "`exit 42` must come back as 42.") {
+    AxshTest(SHELL, "Exit code", "`exit 42` comes back as 42.") {
         val r = sh("exit 42")
         if (r.error == null && r.exitCode == 42) pass("42") else fail(r.why(), r.dump())
     },
-    AxshTest(SHELL, "stdout and stderr apart", "Each stream reaches its own pipe.") {
+    AxshTest(SHELL, "stdout and stderr apart", "stdout and stderr arrive on their own pipes.") {
         val r = sh("echo out; echo err >&2")
         if (r.stdout.trim() == "out" && r.stderr.trim() == "err") pass("out | err", r.dump())
         else fail("streams mixed or missing", r.dump())
     },
-    AxshTest(SHELL, "stdin", "Input written to axsh reaches the shell, then EOF.") {
+    AxshTest(SHELL, "stdin", "Input reaches the shell, then EOF.") {
         val r = sh("read l; echo \"got:\$l\"; cat | wc -c", "hello axsh\nrest\n")
         val lines = r.out.lines()
         if (lines.firstOrNull() == "got:hello axsh" && lines.getOrNull(1)?.trim() == "5") pass(r.out, r.dump())
         else fail("unexpected: ${r.out}", r.dump())
     },
-    AxshTest(SHELL, "Large output", "100 000 lines (~600 KB) through the pipes, nothing lost.") {
+    AxshTest(SHELL, "Large output", "100 000 lines, none lost.") {
         val r = sh("seq 1 100000")
         val lines = r.stdout.lines().filter { it.isNotEmpty() }
         val kb = r.stdout.length / 1024
         if (r.ok && lines.size == 100_000 && lines.last() == "100000") pass("${kb} KB in ${r.millis}ms")
         else fail("got ${lines.size} lines (${r.why()})")
     },
-    AxshTest(SHELL, "Server environment", "The shell gets the server's env: AXERON* and its PATH.") {
+    AxshTest(SHELL, "Server environment", "The shell has the server's env (AXERON*, PATH).") {
         val r = sh("env | grep -E '^(AXERON|TMPDIR|PATH)' | sort")
         val ok = r.ok && r.stdout.contains("AXERONDIR=") && r.stdout.contains("PATH=")
         if (ok) pass("${r.out.lines().size} variables", r.dump()) else fail(r.why(), r.dump())
     },
 
     // ---- privileges ----
-    AxshTest(PRIVILEGES, "Identity", "Who the shell runs as: shell (2000) in ADB mode, root (0) with root.") {
+    AxshTest(PRIVILEGES, "Identity", "The shell's uid and SELinux context.") {
         val r = sh("echo \"\$(id -u) \$(tr -d '\\0' < /proc/self/attr/current)\"")
         val uid = r.out.substringBefore(' ')
         when {
@@ -143,16 +153,16 @@ private val mainTests: List<AxshTest> = listOf(
             else -> fail("runs as uid $uid, not the server", r.dump())
         }
     },
-    AxshTest(PRIVILEGES, "Package manager", "`pm list packages`, which an app can't do on its own.") {
+    AxshTest(PRIVILEGES, "Package manager", "`pm list packages`.") {
         val r = sh("pm list packages | wc -l")
         val count = r.out.toIntOrNull() ?: 0
         if (r.ok && count > 0) pass("$count packages") else fail(r.why(), r.dump())
     },
-    AxshTest(PRIVILEGES, "Settings", "Read a global setting through `settings`.") {
+    AxshTest(PRIVILEGES, "Settings", "`settings get global adb_enabled`.") {
         val r = sh("settings get global adb_enabled")
         if (r.ok) info("adb_enabled = ${r.out}", r.dump()) else fail(r.why(), r.dump())
     },
-    AxshTest(PRIVILEGES, "dumpsys", "A system service dump, battery here.") {
+    AxshTest(PRIVILEGES, "dumpsys", "`dumpsys battery`.") {
         val r = sh("dumpsys battery | grep -E 'level|status|AC powered|USB powered'")
         if (r.ok) info(r.out.lines().joinToString(" · ") { it.trim() }, r.dump()) else fail(r.why(), r.dump())
     },
@@ -167,7 +177,7 @@ private val mainTests: List<AxshTest> = listOf(
             else -> pass(r.out.lines().first().removePrefix("version="), r.dump())
         }
     },
-    AxshTest(TEST_FUNCTION, "axtest on PATH", "The plugin's system/bin/axtest, linked into \$AXERONXBIN.") {
+    AxshTest(TEST_FUNCTION, "axtest on PATH", "axtest is linked into \$AXERONXBIN.") {
         val r = sh("command -v axtest; echo \"\$AXERONXBIN\"")
         val (path, xbin) = r.out.lines().let { it.getOrElse(0) { "" } to it.getOrElse(1) { "" } }
         when {
@@ -176,17 +186,17 @@ private val mainTests: List<AxshTest> = listOf(
             else -> fail("found at $path, expected $xbin/axtest", r.dump())
         }
     },
-    AxshTest(TEST_FUNCTION, "axtest ping", "Call the plugin's binary from this app.") {
+    AxshTest(TEST_FUNCTION, "axtest ping", "Calls axtest, expects pong.") {
         val r = sh("axtest ping")
         if (r.ok && r.out.startsWith("pong")) pass(r.out, r.dump()) else fail(r.why(), r.dump())
     },
-    AxshTest(TEST_FUNCTION, "axtest env", "The variables the plugin's binary sees when an app calls it.") {
+    AxshTest(TEST_FUNCTION, "axtest env", "Variables axtest sees when an app calls it.") {
         val r = sh("axtest env")
         if (r.ok && r.out.isNotEmpty()) pass("${r.out.lines().size} variables", r.dump()) else fail(r.why(), r.dump())
     },
     AxshTest(
         TEST_FUNCTION, "Not marked as the plugin",
-        "An axsh shell is not a plugin process: AXERON_PLUGIN must be unset."
+        "AXERON_PLUGIN is unset in an axsh shell."
     ) {
         val r = sh("axtest marker")
         when {
@@ -195,16 +205,16 @@ private val mainTests: List<AxshTest> = listOf(
             else -> fail("marked: ${r.out}", r.dump())
         }
     },
-    AxshTest(TEST_FUNCTION, "system.prop", "The plugin's debug.axeron.test_function=loaded.") {
+    AxshTest(TEST_FUNCTION, "system.prop", "debug.axeron.test_function = loaded.") {
         val r = sh("getprop debug.axeron.test_function")
         if (r.ok && r.out == "loaded") pass(r.out) else fail("'${r.out}' (${r.why()})", r.dump())
     },
-    AxshTest(TEST_FUNCTION, "Plugin processes", "`axtest procs`: plugin processes alive now, with their plugin.") {
+    AxshTest(TEST_FUNCTION, "Plugin processes", "Plugin processes alive now.") {
         val r = sh("axtest procs")
         val lines = r.out.lines().filter { it.isNotBlank() }
         if (r.ok) info("${lines.size} marked processes", r.dump()) else fail(r.why(), r.dump())
     },
-    AxshTest(TEST_FUNCTION, "Plugin reports", "Every [FAIL] the plugin's own stages wrote to reports/.") {
+    AxshTest(TEST_FUNCTION, "Plugin reports", "[FAIL] lines in the plugin's reports/.") {
         val r = sh(
             "cd \"$PLUGIN/reports\" 2>/dev/null || exit 3; ls *.txt | wc -l; grep -H '^\\[FAIL\\]' *.txt; true"
         )
@@ -222,9 +232,7 @@ private val mainTests: List<AxshTest> = listOf(
     // ---- libsu RootService ----
     AxshTest(
         ROOT_SERVICE, "Bind through axsh",
-        "libsu starts its RootService process from its main shell, here libaxsh.so (whatever the " +
-                "runner). Root mode only: libsu skips the launch on a non-root shell, and in ADB mode " +
-                "shell can't read its main.jar nor send the reply broadcast (BROADCAST_PACKAGE_REMOVED)."
+        "Binds RootUserService through libsu, shows its uid. Skipped in ADB mode."
     ) {
         // RootService.bind's own gate (libsu 6.0.0): without it the bind just never connects.
         if (!com.topjohnwu.superuser.Shell.getShell().isRoot) {
@@ -246,10 +254,10 @@ private val mainTests: List<AxshTest> = listOf(
         }
     },
 
-    // ---- ShellService (POC) ----
+    // ---- ShellService ----
     AxshTest(
-        SHELL_SERVICE, "Bind like RootService",
-        "Bind UserService1 and ask who it is. Expected: uid 2000 (ADB mode) or 0 (root mode)."
+        SHELL_SERVICE, "Bind",
+        "Binds UserService1, shows its uid and SELinux context."
     ) {
         val connection = UserServiceConnection()
         val intent = Intent(Application.app, UserService1::class.java)
@@ -268,7 +276,7 @@ private val mainTests: List<AxshTest> = listOf(
     },
     AxshTest(
         SHELL_SERVICE, "Runtime.exec inside the service",
-        "UserService1 runs `id` with Runtime.exec. The output is what the service's process sees."
+        "`id`, run by Runtime.exec inside UserService1."
     ) {
         val connection = UserServiceConnection()
         val intent = Intent(Application.app, UserService1::class.java)
@@ -285,8 +293,7 @@ private val mainTests: List<AxshTest> = listOf(
     },
     AxshTest(
         SHELL_SERVICE, "Two services at once",
-        "Bind UserService1 and UserService2 together, then ask each for its pid and `id`. " +
-                "Each service class has its own process."
+        "Binds UserService1 and UserService2, shows both pids."
     ) {
         val connection1 = UserServiceConnection()
         val connection2 = UserServiceConnection()
@@ -313,9 +320,34 @@ private val mainTests: List<AxshTest> = listOf(
         }
     },
     AxshTest(
+        SHELL_SERVICE, "Static shared between services",
+        "Each service adds 1 to the same static counter."
+    ) {
+        val connection1 = UserServiceConnection()
+        val connection2 = UserServiceConnection()
+        val intent1 = Intent(Application.app, UserService1::class.java)
+        val intent2 = Intent(Application.app, UserService2::class.java)
+        mainHandler.post { ShellService.bind(intent1, connection1) }
+        mainHandler.post { ShellService.bind(intent2, connection2) }
+        try {
+            val service1 = connection1.waitForService()
+            val service2 = connection2.waitForService()
+            val after1 = service1.incrementSharedCounter()
+            val after2 = service2.incrementSharedCounter()
+            pass(
+                "UserService1 → $after1, UserService2 → $after2",
+                "UserService1 pid=${service1.pid}: counter=$after1\nUserService2 pid=${service2.pid}: counter=$after2"
+            )
+        } catch (e: Exception) {
+            fail(e.toString())
+        } finally {
+            mainHandler.post { ShellService.unbind(connection1) }
+            mainHandler.post { ShellService.unbind(connection2) }
+        }
+    },
+    AxshTest(
         SHELL_SERVICE, "Clipboard from the service's Context",
-        "UserService1 calls ClipboardManager.hasPrimaryClip with its own Context. The clipboard " +
-                "checks the Context's op package against the uid: it must be the uid's own package."
+        "A clipboard call from the service's Context; shows its op package."
     ) {
         val connection = UserServiceConnection()
         val intent = Intent(Application.app, UserService1::class.java)
@@ -333,8 +365,7 @@ private val mainTests: List<AxshTest> = listOf(
     },
     AxshTest(
         SHELL_SERVICE, "getApplicationContext()",
-        "What UserService1's getApplicationContext() returns. Many libraries call it; \"null\" " +
-                "means they would crash inside the service."
+        "What getApplicationContext() returns inside the service."
     ) {
         val connection = UserServiceConnection()
         val intent = Intent(Application.app, UserService1::class.java)
@@ -361,15 +392,13 @@ private val mainTests: List<AxshTest> = listOf(
 
 private val mainHandler = Handler(Looper.getMainLooper())
 
-private const val SHELL_SERVICE_DAEMON = "ShellService daemon"
-
 private val daemonTests: List<AxshTest> = listOf(
     AxshTest(
         SHELL_SERVICE_DAEMON, "Bind, unbind, bind again",
-        "DaemonService's onUnbind returns true. Bind, read its pid, unbind, wait 2 s, bind again, " +
-                "read its pid. The same pid twice: the process stayed on between the binds."
+        "Pid before and after an unbind."
     ) {
         val intent = Intent(Application.app, DaemonService::class.java)
+        intent.addCategory(ShellService.CATEGORY_DAEMON_MODE)
 
         val connection1 = UserServiceConnection()
         mainHandler.post { ShellService.bind(intent, connection1) }
@@ -395,11 +424,11 @@ private val daemonTests: List<AxshTest> = listOf(
         }
     },
     AxshTest(
-        SHELL_SERVICE_DAEMON, "Pid now (run, close the app, run again)",
-        "Bind DaemonService and show its pid. Run it, close this app from Recents, open it and run " +
-                "it again: the same pid means the daemon outlived the app."
+        SHELL_SERVICE_DAEMON, "Survives closing the app",
+        "Shows the pid. Run, close the app from Recents, reopen, run again."
     ) {
         val intent = Intent(Application.app, DaemonService::class.java)
+        intent.addCategory(ShellService.CATEGORY_DAEMON_MODE)
         val connection = UserServiceConnection()
         mainHandler.post { ShellService.bind(intent, connection) }
         try {
@@ -415,10 +444,10 @@ private val daemonTests: List<AxshTest> = listOf(
     },
     AxshTest(
         SHELL_SERVICE_DAEMON, "Stop it",
-        "ShellService.stop on DaemonService (not bound here), wait 2 s, then bind: a new pid means " +
-                "the old daemon is gone. Run it last: it leaves a fresh daemon behind."
+        "stop(), then bind again: shows the new pid."
     ) {
         val intent = Intent(Application.app, DaemonService::class.java)
+        intent.addCategory(ShellService.CATEGORY_DAEMON_MODE)
         mainHandler.post { ShellService.stop(intent) }
 
         Thread.sleep(2000)
