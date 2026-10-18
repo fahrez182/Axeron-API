@@ -84,7 +84,7 @@ public class Axeron {
         if (permissionGranted) return PackageManager.PERMISSION_GRANTED;
         try {
             permissionGranted = requireService().checkSelfPermission();
-        } catch (RemoteException | IllegalStateException e) {
+        } catch (RemoteException | IllegalStateException | SecurityException e) {
             Log.e(TAG, "checkSelfPermission", e);
             return PackageManager.PERMISSION_DENIED;
         }
@@ -96,7 +96,7 @@ public class Axeron {
         if (shouldShowRequestPermissionRationale) return true;
         try {
             shouldShowRequestPermissionRationale = requireService().shouldShowRequestPermissionRationale();
-        } catch (RemoteException | IllegalStateException e) {
+        } catch (RemoteException | IllegalStateException | SecurityException e) {
             Log.e(TAG, "shouldShowRequestPermissionRationale", e);
             return false;
         }
@@ -138,7 +138,7 @@ public class Axeron {
     public static void requestPermission(int requestCode) {
         try {
             requireService().requestPermission(requestCode);
-        } catch (RemoteException | IllegalStateException e) {
+        } catch (RemoteException | IllegalStateException | SecurityException e) {
             Log.e(TAG, "requestPermission", e);
         }
     }
@@ -304,7 +304,7 @@ public class Axeron {
     public static void enableShizukuService(boolean enable) {
         try {
             requireService().enableShizukuService(enable);
-        } catch (RemoteException | IllegalStateException e) {
+        } catch (RemoteException | IllegalStateException | SecurityException e) {
             Log.e(TAG, "enableShizukuService", e);
         }
     }
@@ -312,7 +312,7 @@ public class Axeron {
     protected static boolean isFirstInit(boolean markAsFirstInit) {
         try {
             return requireService().isFirstInit(markAsFirstInit);
-        } catch (RemoteException | IllegalStateException e) {
+        } catch (RemoteException | IllegalStateException | SecurityException e) {
             Log.e(TAG, "isFirstInit", e);
             return false;
         }
@@ -338,7 +338,7 @@ public class Axeron {
     public static AxeronFileService newFileService() {
         try {
             return new AxeronFileService(requireService().getFileService());
-        } catch (RemoteException | IllegalStateException e) {
+        } catch (RemoteException | IllegalStateException | SecurityException e) {
             Log.e(TAG, "newFileService", e);
             return null;
         }
@@ -388,7 +388,10 @@ public class Axeron {
         if (binder != null) {
             try {
                 requireService().exit();
-            } catch (RemoteException ignored) {
+            } catch (RemoteException | SecurityException ignored) {
+                // A server that doesn't take us for the manager (it outlived a reinstall) refuses
+                // exit. Let go of it all the same: only the starter, run as root or over ADB, can
+                // kill it, and it does on the next start.
             }
             binder = null;
             service = null;
@@ -435,7 +438,7 @@ public class Axeron {
     public static void transactRemote(@NonNull Parcel data, @Nullable Parcel reply, int flags) {
         try {
             requireService().asBinder().transact(BINDER_TRANSACTION_transact, data, reply, flags);
-        } catch (RemoteException | IllegalStateException e) {
+        } catch (RemoteException | IllegalStateException | SecurityException e) {
             Log.e(TAG, "transactRemote", e);
         }
     }
@@ -455,7 +458,7 @@ public class Axeron {
     public static void setNewEnvironment(Environment env) {
         try {
             requireService().setNewEnvironment(env);
-        } catch (RemoteException | IllegalStateException e) {
+        } catch (RemoteException | IllegalStateException | SecurityException e) {
             Log.e(TAG, "setNewEnvironment", e);
         }
     }
@@ -463,7 +466,7 @@ public class Axeron {
     public static void setPreferSystemBinaries(boolean prefer) {
         try {
             requireService().setPreferSystemBinaries(prefer);
-        } catch (RemoteException | IllegalStateException e) {
+        } catch (RemoteException | IllegalStateException | SecurityException e) {
             Log.e(TAG, "setPreferSystemBinaries", e);
         }
     }
@@ -475,7 +478,7 @@ public class Axeron {
     public static void setWakeLock(boolean enabled) {
         try {
             requireService().setWakeLock(enabled);
-        } catch (RemoteException | IllegalStateException e) {
+        } catch (RemoteException | IllegalStateException | SecurityException e) {
             Log.e(TAG, "setWakeLock", e);
         }
     }
@@ -484,7 +487,7 @@ public class Axeron {
     public static boolean isWakeLockHeld() {
         try {
             return requireService().isWakeLockHeld();
-        } catch (RemoteException | IllegalStateException e) {
+        } catch (RemoteException | IllegalStateException | SecurityException e) {
             Log.e(TAG, "isWakeLockHeld", e);
             return false;
         }
@@ -493,7 +496,7 @@ public class Axeron {
     public static int[] getFlagsForUids(@NonNull int[] uids, int mask) {
         try {
             return requireService().getFlagsForUids(uids, mask);
-        } catch (RemoteException | IllegalStateException e) {
+        } catch (RemoteException | IllegalStateException | SecurityException e) {
             Log.e(TAG, "getFlagsForUids", e);
             return new int[uids.length];
         }
@@ -503,9 +506,25 @@ public class Axeron {
         if (getAxeronInfo().isRoot()) return PackageManager.PERMISSION_GRANTED;
         try {
             return requireService().checkPermission(permission);
-        } catch (RemoteException | IllegalStateException e) {
+        } catch (RemoteException | IllegalStateException | SecurityException e) {
             Log.e(TAG, "checkRemotePermission", e);
             return PackageManager.PERMISSION_DENIED;
+        }
+    }
+
+    /**
+     * Whether the server refuses us as its manager: one left running across a reinstall of the
+     * manager still holds the old uid. Its gated calls answer SecurityException then, and
+     * checkPermission is gated on every server version.
+     */
+    public static boolean isRefusedByServer() {
+        try {
+            requireService().checkPermission("android.permission.GRANT_RUNTIME_PERMISSIONS");
+            return false;
+        } catch (SecurityException e) {
+            return true;
+        } catch (RemoteException | IllegalStateException e) {
+            return false;
         }
     }
 
@@ -525,7 +544,7 @@ public class Axeron {
     public static void attachUserService(@NonNull IBinder binder, @NonNull Bundle options) {
         try {
             requireService().attachUserService(binder, options);
-        } catch (RemoteException | IllegalStateException e) {
+        } catch (RemoteException | IllegalStateException | SecurityException e) {
             Log.e(TAG, "attachUserService", e);
         }
     }
@@ -543,7 +562,7 @@ public class Axeron {
     public static void dispatchPermissionConfirmationResult(int requestUid, int requestPid, int requestCode, @NonNull Bundle data) {
         try {
             requireService().dispatchPermissionConfirmationResult(requestUid, requestPid, requestCode, data);
-        } catch (RemoteException | IllegalStateException e) {
+        } catch (RemoteException | IllegalStateException | SecurityException e) {
             Log.e(TAG, "dispatchPermissionConfirmationResult", e);
         }
     }
@@ -552,7 +571,7 @@ public class Axeron {
     public static int getFlagsForUid(int uid, int mask) {
         try {
             return requireService().getFlagsForUid(uid, mask);
-        } catch (RemoteException | IllegalStateException e) {
+        } catch (RemoteException | IllegalStateException | SecurityException e) {
             Log.e(TAG, "getFlagsForUid", e);
             return 0;
         }
@@ -562,7 +581,7 @@ public class Axeron {
     public static void updateFlagsForUid(int uid, int mask, int value) {
         try {
             requireService().updateFlagsForUid(uid, mask, value);
-        } catch (RemoteException | IllegalStateException e) {
+        } catch (RemoteException | IllegalStateException | SecurityException e) {
             Log.e(TAG, "updateFlagsForUid", e);
         }
     }
