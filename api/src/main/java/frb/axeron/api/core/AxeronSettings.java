@@ -202,12 +202,18 @@ public class AxeronSettings {
         getPreferences().edit().putBoolean(WAKE_LOCK, enabled).apply();
     }
 
+    /**
+     * The language picked in the app (saved below Android 13, which keeps it itself), or null
+     * for the system language. The picker saves "system" in lower case, and older versions
+     * "zh_CN", which BCP 47 alone parses to an empty locale.
+     */
+    @Nullable
     public static Locale getLocale() {
         String tag = getPreferences().getString(LANGUAGE, null);
-        if (TextUtils.isEmpty(tag) || "SYSTEM".equals(tag)) {
-            return Locale.getDefault();
+        if (TextUtils.isEmpty(tag) || "system".equalsIgnoreCase(tag)) {
+            return null;
         }
-        return Locale.forLanguageTag(tag);
+        return Locale.forLanguageTag(tag.replace('_', '-'));
     }
 
     @IntDef({
