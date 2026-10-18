@@ -6,4 +6,13 @@
         <package android:name="frb.axeron.manager" />
     </queries>
 
+    <application>
+        <!-- ShellService: its processes hand their binder in here (it checks their uid), and it
+             keeps the app's Context for ShellService.bind. -->
+        <provider
+            android:name="frb.axeron.shell.ShellServiceProvider"
+            android:authorities="${applicationId}.shellservice"
+            android:exported="true" />
+    </application>
+
 </manifest>

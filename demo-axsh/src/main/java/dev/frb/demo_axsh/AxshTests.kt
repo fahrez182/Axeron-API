@@ -1,5 +1,10 @@
 package dev.frb.demo_axsh
 
+import android.content.Intent
+import android.os.Handler
+import android.os.Looper
+import com.topjohnwu.superuser.ipc.RootService
+import frb.axeron.shell.ShellService
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
 
@@ -35,11 +40,13 @@ private const val CONNECTION = "Connection"
 private const val SHELL = "Shell"
 private const val PRIVILEGES = "Privileges"
 private const val TEST_FUNCTION = "Test Function plugin"
+private const val ROOT_SERVICE = "libsu RootService"
+private const val SHELL_SERVICE = "ShellService (POC)"
 
 // The plugin's folder, as its scripts see it ($MODDIR).
 private const val PLUGIN = "\$AXERONDIR/plugins/test_function"
 
-val axshTests: List<AxshTest> = listOf(
+private val mainTests: List<AxshTest> = listOf(
     // ---- connection ----
     AxshTest(
         CONNECTION, "Reach the server",
@@ -211,4 +218,223 @@ val axshTests: List<AxshTest> = listOf(
             else -> fail("${fails.size} FAIL in $reports reports", fails.joinToString("\n"))
         }
     },
+
+    // ---- libsu RootService ----
+    AxshTest(
+        ROOT_SERVICE, "Bind through axsh",
+        "libsu starts its RootService process from its main shell, here libaxsh.so (whatever the " +
+                "runner). Root mode only: libsu skips the launch on a non-root shell, and in ADB mode " +
+                "shell can't read its main.jar nor send the reply broadcast (BROADCAST_PACKAGE_REMOVED)."
+    ) {
+        // RootService.bind's own gate (libsu 6.0.0): without it the bind just never connects.
+        if (!com.topjohnwu.superuser.Shell.getShell().isRoot) {
+            return@AxshTest info("skipped by libsu: main shell isn't root (ADB mode)")
+        }
+        val connection = UserServiceConnection()
+        val intent = Intent(Application.app, RootUserService::class.java)
+        mainHandler.post { RootService.bind(intent, connection) }
+        try {
+            val service = connection.waitForService()
+            val uid = service.uid
+            val pid = service.pid
+            val seLinux = service.seLinuxContext
+            pass("uid $uid · $seLinux", "uid=$uid\npid=$pid\nselinux=$seLinux")
+        } catch (e: Exception) {
+            fail(e.toString())
+        } finally {
+            mainHandler.post { RootService.unbind(connection) }
+        }
+    },
+
+    // ---- ShellService (POC) ----
+    AxshTest(
+        SHELL_SERVICE, "Bind like RootService",
+        "Bind UserService1 and ask who it is. Expected: uid 2000 (ADB mode) or 0 (root mode)."
+    ) {
+        val connection = UserServiceConnection()
+        val intent = Intent(Application.app, UserService1::class.java)
+        mainHandler.post { ShellService.bind(intent, connection) }
+        try {
+            val service = connection.waitForService()
+            val uid = service.uid
+            val pid = service.pid
+            val seLinux = service.seLinuxContext
+            pass("uid $uid · $seLinux", "uid=$uid\npid=$pid\nselinux=$seLinux")
+        } catch (e: Exception) {
+            fail(e.toString())
+        } finally {
+            mainHandler.post { ShellService.unbind(connection) }
+        }
+    },
+    AxshTest(
+        SHELL_SERVICE, "Runtime.exec inside the service",
+        "UserService1 runs `id` with Runtime.exec. The output is what the service's process sees."
+    ) {
+        val connection = UserServiceConnection()
+        val intent = Intent(Application.app, UserService1::class.java)
+        mainHandler.post { ShellService.bind(intent, connection) }
+        try {
+            val service = connection.waitForService()
+            val output = service.exec("id")
+            pass(output, output)
+        } catch (e: Exception) {
+            fail(e.toString())
+        } finally {
+            mainHandler.post { ShellService.unbind(connection) }
+        }
+    },
+    AxshTest(
+        SHELL_SERVICE, "Two services at once",
+        "Bind UserService1 and UserService2 together, then ask each for its pid and `id`. " +
+                "Each service class has its own process."
+    ) {
+        val connection1 = UserServiceConnection()
+        val connection2 = UserServiceConnection()
+        val intent1 = Intent(Application.app, UserService1::class.java)
+        val intent2 = Intent(Application.app, UserService2::class.java)
+        mainHandler.post { ShellService.bind(intent1, connection1) }
+        mainHandler.post { ShellService.bind(intent2, connection2) }
+        try {
+            val service1 = connection1.waitForService()
+            val service2 = connection2.waitForService()
+            val pid1 = service1.pid
+            val pid2 = service2.pid
+            val id1 = service1.exec("id")
+            val id2 = service2.exec("id")
+            pass(
+                "pid $pid1 & pid $pid2",
+                "UserService1  pid=$pid1\n$id1\n\nUserService2  pid=$pid2\n$id2"
+            )
+        } catch (e: Exception) {
+            fail(e.toString())
+        } finally {
+            mainHandler.post { ShellService.unbind(connection1) }
+            mainHandler.post { ShellService.unbind(connection2) }
+        }
+    },
+    AxshTest(
+        SHELL_SERVICE, "Clipboard from the service's Context",
+        "UserService1 calls ClipboardManager.hasPrimaryClip with its own Context. The clipboard " +
+                "checks the Context's op package against the uid: it must be the uid's own package."
+    ) {
+        val connection = UserServiceConnection()
+        val intent = Intent(Application.app, UserService1::class.java)
+        mainHandler.post { ShellService.bind(intent, connection) }
+        try {
+            val service = connection.waitForService()
+            val opPackage = service.opPackageName
+            val hasClip = service.hasPrimaryClip()
+            pass("$opPackage · hasPrimaryClip=$hasClip", "opPackageName=$opPackage\nhasPrimaryClip=$hasClip")
+        } catch (e: Exception) {
+            fail(e.toString())
+        } finally {
+            mainHandler.post { ShellService.unbind(connection) }
+        }
+    },
+    AxshTest(
+        SHELL_SERVICE, "getApplicationContext()",
+        "What UserService1's getApplicationContext() returns. Many libraries call it; \"null\" " +
+                "means they would crash inside the service."
+    ) {
+        val connection = UserServiceConnection()
+        val intent = Intent(Application.app, UserService1::class.java)
+        mainHandler.post { ShellService.bind(intent, connection) }
+        try {
+            val service = connection.waitForService()
+            // A Kotlin null here (not the string "null"): the service's process doesn't know
+            // this AIDL method, so it runs an older base.apk.
+            val appContext: String? = service.applicationContextName
+            if (appContext == null) {
+                fail("no answer: the service runs an older base.apk")
+            } else if (appContext == "null") {
+                fail("getApplicationContext() returned null")
+            } else {
+                pass(appContext)
+            }
+        } catch (e: Exception) {
+            fail(e.toString())
+        } finally {
+            mainHandler.post { ShellService.unbind(connection) }
+        }
+    },
 )
+
+private val mainHandler = Handler(Looper.getMainLooper())
+
+private const val SHELL_SERVICE_DAEMON = "ShellService daemon"
+
+private val daemonTests: List<AxshTest> = listOf(
+    AxshTest(
+        SHELL_SERVICE_DAEMON, "Bind, unbind, bind again",
+        "DaemonService's onUnbind returns true. Bind, read its pid, unbind, wait 2 s, bind again, " +
+                "read its pid. The same pid twice: the process stayed on between the binds."
+    ) {
+        val intent = Intent(Application.app, DaemonService::class.java)
+
+        val connection1 = UserServiceConnection()
+        mainHandler.post { ShellService.bind(intent, connection1) }
+        val firstPid: Int
+        try {
+            firstPid = connection1.waitForService().pid
+        } catch (e: Exception) {
+            return@AxshTest fail("first bind: $e")
+        }
+        mainHandler.post { ShellService.unbind(connection1) }
+
+        Thread.sleep(2000)
+
+        val connection2 = UserServiceConnection()
+        mainHandler.post { ShellService.bind(intent, connection2) }
+        try {
+            val secondPid = connection2.waitForService().pid
+            pass("pid $firstPid, then pid $secondPid", "first bind: pid $firstPid\nsecond bind: pid $secondPid")
+        } catch (e: Exception) {
+            fail("second bind: $e", "first bind: pid $firstPid")
+        } finally {
+            mainHandler.post { ShellService.unbind(connection2) }
+        }
+    },
+    AxshTest(
+        SHELL_SERVICE_DAEMON, "Pid now (run, close the app, run again)",
+        "Bind DaemonService and show its pid. Run it, close this app from Recents, open it and run " +
+                "it again: the same pid means the daemon outlived the app."
+    ) {
+        val intent = Intent(Application.app, DaemonService::class.java)
+        val connection = UserServiceConnection()
+        mainHandler.post { ShellService.bind(intent, connection) }
+        try {
+            val service = connection.waitForService()
+            val pid = service.pid
+            val uid = service.uid
+            pass("pid $pid · uid $uid", "pid=$pid\nuid=$uid")
+        } catch (e: Exception) {
+            fail(e.toString())
+        } finally {
+            mainHandler.post { ShellService.unbind(connection) }
+        }
+    },
+    AxshTest(
+        SHELL_SERVICE_DAEMON, "Stop it",
+        "ShellService.stop on DaemonService (not bound here), wait 2 s, then bind: a new pid means " +
+                "the old daemon is gone. Run it last: it leaves a fresh daemon behind."
+    ) {
+        val intent = Intent(Application.app, DaemonService::class.java)
+        mainHandler.post { ShellService.stop(intent) }
+
+        Thread.sleep(2000)
+
+        val connection = UserServiceConnection()
+        mainHandler.post { ShellService.bind(intent, connection) }
+        try {
+            val pid = connection.waitForService().pid
+            pass("pid after stop: $pid", "pid after stop: $pid")
+        } catch (e: Exception) {
+            fail(e.toString())
+        } finally {
+            mainHandler.post { ShellService.unbind(connection) }
+        }
+    },
+)
+
+// Declared last: top-level vals initialize in file order.
+val axshTests: List<AxshTest> = mainTests + daemonTests

@@ -1,3 +1,6 @@
+# libsu's root process makes RootServices by name, through reflection.
+-keep class * extends com.topjohnwu.superuser.ipc.RootService { <init>(); }
+
 # Add project specific ProGuard rules here.
 # You can control the set of applied configuration files using the
 # proguardFiles setting in build.gradle.

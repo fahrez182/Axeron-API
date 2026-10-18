@@ -23,6 +23,8 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+        // IUserService, the demo services' interface.
+        aidl = true
     }
     packaging {
         // libaxsh.so is exec'd, so it must be extracted to nativeLibraryDir.
@@ -45,6 +47,8 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 
     implementation(libs.topjohnwu.libsu.core)
+    // RootService, to see whether libsu's own root process starts through an axsh shell.
+    implementation(libs.topjohnwu.libsu.service)
     // Our own libaxsh.so and the in-process broker, for axsh_direct_connection.
     implementation(project(":axsh"))
 }

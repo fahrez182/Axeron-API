@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -322,12 +323,15 @@ private fun OutputBox(text: String) {
             .fillMaxWidth()
             .padding(top = 6.dp),
     ) {
-        Text(
-            text,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 11.sp,
-            modifier = Modifier.padding(10.dp),
-        )
+        // Selectable: failures carry stack traces worth copying.
+        SelectionContainer {
+            Text(
+                text,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp,
+                modifier = Modifier.padding(10.dp),
+            )
+        }
     }
 }
 
