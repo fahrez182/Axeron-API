@@ -37,6 +37,9 @@ object AxeronPluginService {
         get() = "${application.applicationInfo.nativeLibraryDir}/libbusybox.so"
     val RESETPROP: String
         get() = "${application.applicationInfo.nativeLibraryDir}/libresetprop.so"
+    /** The plugin igniter's dex (the manager's :reignite module), run in app_process. */
+    val IGNITER: String
+        get() = "${application.applicationInfo.nativeLibraryDir}/libaxreignite.so"
     val BASEAPK: String
         get() = application.applicationInfo.sourceDir
 
@@ -447,10 +450,6 @@ object AxeronPluginService {
             rootMode,
             AxeronApiConstant.folder.PARENT_PLUGIN
         ).absolutePath
-        val binDir = PathHelper.getWorkingPath(
-            rootMode,
-            AxeronApiConstant.folder.PARENT_BINARY
-        ).absolutePath
 
         out("Resetting AxManager")
         out("at $axeronDir")
@@ -477,10 +476,7 @@ object AxeronPluginService {
         // 2) jalankan igniter secara native (langsung panggil class)
         out("- Running igniter (native)")
         runCatching {
-            igniteSuspendService(false,
-                binDir,
-                onStdout,
-                onStderr)
+            igniteSuspendService(false, onStdout, onStderr)
         }.onFailure {
             err("!! Igniter crash: ${it.stackTraceToString()}")
             return@withContext FlashResult(-1, it.stackTraceToString(), false)
@@ -555,7 +551,6 @@ object AxeronPluginService {
 
     suspend fun igniteSuspendService(
         ensure: Boolean = true,
-        binDir: String = AXERONBIN,
         onStdout: (String) -> Unit = {},
         onStderr: (String) -> Unit = {}
     ): Boolean =
@@ -571,17 +566,17 @@ object AxeronPluginService {
 
             if (Axeron.isFirstInit(true)) {
                 Log.i(TAG, "First Init: Removing old bin")
-                removeScriptsAndBinaries()
+                removeScripts()
                 removeLibrary()
             }
 
             if (ensure) {
                 if (!ensureLibrary()) return@withContext false
-                if (!ensureScriptsAndBinaries()) return@withContext false
+                if (!ensureScripts()) return@withContext false
             }
 
             val cmd =
-                "CLASSPATH=$binDir/ax_reignite.dex; app_process / frb.axeron.reignite.Igniter ${AxeronSettings.getEnableDeveloperOptions()}"
+                "CLASSPATH=$IGNITER; app_process / frb.axeron.reignite.Igniter ${AxeronSettings.getEnableDeveloperOptions()}"
 
             Log.d(TAG, "Start Init Service")
 
@@ -599,19 +594,17 @@ object AxeronPluginService {
         }
 
 
-    suspend fun removeScriptsAndBinaries() = withContext(Dispatchers.IO) {
+    suspend fun removeScripts() = withContext(Dispatchers.IO) {
         val fs = axFS ?: return@withContext
         val binDir = AXERONBIN
 
-        listOf("scripts", "binaries").forEach { folder ->
-            application.assets.list(folder)?.forEach { filename ->
-                val dstFile = File(binDir, filename)
-                if (fs.exists(dstFile.absolutePath)) {
-                    if (!fs.delete(dstFile.absolutePath)) {
-                        Log.e(TAG, "failed to remove ${dstFile.absolutePath}")
-                    } else {
-                        Log.i(TAG, "removed ${dstFile.absolutePath}")
-                    }
+        application.assets.list("scripts")?.forEach { filename ->
+            val dstFile = File(binDir, filename)
+            if (fs.exists(dstFile.absolutePath)) {
+                if (!fs.delete(dstFile.absolutePath)) {
+                    Log.e(TAG, "failed to remove ${dstFile.absolutePath}")
+                } else {
+                    Log.i(TAG, "removed ${dstFile.absolutePath}")
                 }
             }
         }
@@ -661,36 +654,27 @@ object AxeronPluginService {
         session.isSuccessful
     }
 
-    private suspend fun ensureScriptsAndBinaries(): Boolean = withContext(Dispatchers.IO) {
+    private suspend fun ensureScripts(): Boolean = withContext(Dispatchers.IO) {
         val fs = axFS ?: return@withContext false
         val binDir = AXERONBIN
 
         if (!fs.exists(binDir) && !fs.mkdirs(binDir)) return@withContext false
 
         val assetManager = application.assets
-        val folders = mapOf("scripts" to true, "binaries" to false)
+        assetManager.list("scripts")?.forEach { filename ->
+            val dstPath = File(binDir, filename).absolutePath
+            if (fs.exists(dstPath)) return@forEach
 
-        folders.forEach { (folder, isScript) ->
-            assetManager.list(folder)?.forEach { filename ->
-                val dstPath = File(binDir, filename).absolutePath
-                if (fs.exists(dstPath)) return@forEach
-
-                runCatching {
-                    assetManager.open("$folder/$filename").use { inputStream ->
-                        if (copyStream(inputStream, fs, dstPath)) {
-                            execWithIO("chmod 755 \"$dstPath\"", useBusybox = false)
-
-                            if (isScript) {
-                                execWithIO("$BUSYBOX dos2unix \"$dstPath\"", useBusybox = true)
-                                Log.i(TAG, "$filename (Script) fixed with dos2unix")
-                            } else {
-                                Log.i(TAG, "$filename (Binary) copied")
-                            }
-                        }
+            runCatching {
+                assetManager.open("scripts/$filename").use { inputStream ->
+                    if (copyStream(inputStream, fs, dstPath)) {
+                        execWithIO("chmod 755 \"$dstPath\"", useBusybox = false)
+                        execWithIO("$BUSYBOX dos2unix \"$dstPath\"", useBusybox = true)
+                        Log.i(TAG, "$filename (Script) fixed with dos2unix")
                     }
-                }.onFailure {
-                    Log.e(TAG, "Failed to copy $folder/$filename", it)
                 }
+            }.onFailure {
+                Log.e(TAG, "Failed to copy scripts/$filename", it)
             }
         }
         return@withContext true
