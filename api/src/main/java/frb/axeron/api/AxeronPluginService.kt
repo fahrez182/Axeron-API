@@ -19,6 +19,7 @@ import frb.axeron.shared.PathHelper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -512,6 +513,16 @@ object AxeronPluginService {
 
         val process = Axsh.exec(cmd, env?.env)
 
+        // Cancelling the caller kills the process: the waits below block their threads and
+        // can't be cancelled themselves, but they return once it is gone.
+        val killer = launch {
+            try {
+                awaitCancellation()
+            } finally {
+                process.destroy()
+            }
+        }
+
         val stdout = StringBuilder()
         val stderr = StringBuilder()
 
@@ -539,6 +550,7 @@ object AxeronPluginService {
         outJob.join()
         errJob.join()
 
+        killer.cancel()
         process.destroy()
 
         ExecResult(exitCode, stdout.toString(), stderr.toString())
@@ -563,19 +575,31 @@ object AxeronPluginService {
 
             if (serverVer > localVer) {
                 Log.i(TAG, "Updating.. $localVer < $serverVer")
+                onStderr("! The server ($localVer) is older than AxManager ($serverVer): restart it first\n")
                 return@withContext false
             }
 
             if (Axeron.isFirstInit(true)) {
                 Log.i(TAG, "First Init: Removing old bin")
+                onStdout("- First start: removing old binaries and scripts\n")
                 removeScripts()
                 removeLibrary()
             }
 
             if (ensure) {
-                if (!ensureLibrary()) return@withContext false
-                if (!ensureScripts()) return@withContext false
+                onStdout("- Checking busybox and resetprop\n")
+                if (!ensureLibrary()) {
+                    onStderr("! Can't install busybox/resetprop into $AXERONBIN\n")
+                    return@withContext false
+                }
+                onStdout("- Checking scripts\n")
+                if (!ensureScripts()) {
+                    onStderr("! Can't install scripts into $AXERONBIN\n")
+                    return@withContext false
+                }
             }
+
+            onStdout("- Starting igniter\n")
 
             val cmd =
                 "CLASSPATH=$IGNITER; app_process / frb.axeron.reignite.Igniter ${AxeronSettings.getEnableDeveloperOptions()}"
@@ -591,6 +615,7 @@ object AxeronPluginService {
 
             if (result.stdout.isNotBlank()) Log.i(TAG, "STDOUT:\n${result.stdout}")
             if (result.stderr.isNotBlank()) Log.e(TAG, "STDERR:\n${result.stderr}")
+            if (!result.isSuccess()) onStderr("! Igniter exited with ${result.exitCode}\n")
 
             result.isSuccess()
         }
