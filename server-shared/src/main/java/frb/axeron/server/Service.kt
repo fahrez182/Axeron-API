@@ -321,7 +321,10 @@ abstract class Service<UserServiceMgr : UserServiceManager,
 
     private var firstInitFlag = true
 
+    // The binder reaches any app that asks (AxRuntime.REQUEST_BINDER), and FileServiceHolder works
+    // as the server's uid: only callers already allowed to run commands get it.
     override fun getFileService(): IFileService? {
+        enforceCallingPermission("getFileService")
         return FileServiceHolder()
     }
 
