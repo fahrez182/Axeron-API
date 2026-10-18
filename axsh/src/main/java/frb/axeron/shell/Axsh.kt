@@ -96,8 +96,10 @@ object Axsh {
         val stdin = ParcelFileDescriptor.createPipe()
         val stdout = ParcelFileDescriptor.createPipe()
         val stderr = if (pty) null else ParcelFileDescriptor.createPipe()
-        val remoteEnds = listOfNotNull(stdin[0], stdout[1], stderr?.get(1))
-        val ourEnds = listOfNotNull(stdin[1], stdout[0], stderr?.get(0))
+        // The server writes the shell's exit code into its write end.
+        val status = ParcelFileDescriptor.createPipe()
+        val remoteEnds = listOfNotNull(stdin[0], stdout[1], stderr?.get(1), status[1])
+        val ourEnds = listOfNotNull(stdin[1], stdout[0], stderr?.get(0), status[0])
 
         val launch = {
             val base = env ?: service.getEnvironment(AxeronApiConstant.server.TYPE_ENV)?.env
@@ -105,7 +107,7 @@ object Axsh {
                 if (pty) Sessions.ptyEnvironment(base, terminalEnv.map { "${it.key}=${it.value}" }) else base
             service.newAxshProcess(
                 argv, shellEnv, dir, stdin[0], stdout[1], stderr?.get(1),
-                pty, if (pty) Sessions.windowSize(rows, cols) else 0
+                pty, if (pty) Sessions.windowSize(rows, cols) else 0, status[1]
             )
                 // A server from before axsh doesn't know the call, and answers with nothing.
                 ?: throw IOException("AxManager server is too old for axsh")
@@ -125,7 +127,7 @@ object Axsh {
             // The server has its own copies now; ours would hide the shell's EOF from the reader.
             remoteEnds.forEach { it.closeQuietly() }
         }
-        return RemoteShell(remote, stdin[1], stdout[0], stderr?.get(0))
+        return RemoteShell(remote, stdin[1], stdout[0], stderr?.get(0), status[0])
     }
 
     private fun ParcelFileDescriptor.closeQuietly() {
@@ -135,12 +137,13 @@ object Axsh {
         }
     }
 
-    /** The shell's ends of the pipes, and its exit code once [IAxshProcess.waitFor] returns. */
+    /** The shell's ends of the pipes, and its exit code once the server writes it to [status]. */
     private class RemoteShell(
         private val remote: IAxshProcess,
         stdin: ParcelFileDescriptor,
         stdout: ParcelFileDescriptor,
         stderr: ParcelFileDescriptor?,
+        status: ParcelFileDescriptor,
     ) : Terminal() {
 
         private val input: OutputStream = ParcelFileDescriptor.AutoCloseOutputStream(stdin)
@@ -155,12 +158,10 @@ object Axsh {
 
         init {
             // exitValue() must answer without blocking (libsu asks it to see if the shell lives).
+            // A local read, not IAxshProcess.waitFor: libsu's cached shell lives as long as the
+            // app, and would hold one of the server's few binder threads all that time.
             thread(name = "axsh-wait", isDaemon = true) {
-                code = try {
-                    remote.waitFor()
-                } catch (_: RemoteException) {
-                    -1 // the server died, and the shell with it
-                }
+                code = Sessions.awaitExit(status, remote)
                 exited.countDown()
             }
         }

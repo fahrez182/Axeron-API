@@ -42,9 +42,15 @@ interface IAxeronService {
     // With pty the process gets a fresh PTY as its controlling terminal and the server copies
     // between it and stdin/stdout; stderr may be null then. size: see
     // IAxshProcess.setWindowSize, 0 to keep the default.
+    // status: a pipe's write end, or null. Once the process exits the server writes its exit code
+    // there (int32, little-endian) and closes it, so the caller learns it without holding one of
+    // the server's binder threads in IAxshProcess.waitFor. EOF without the code means a server
+    // from before this parameter (it leaves the fd unread) or a dead one: ask waitFor then.
+    // Last on purpose: an older caller's parcel ends before it and reads as null.
     IAxshProcess newAxshProcess(in String[] cmd, in String[] env, in String dir,
             in ParcelFileDescriptor stdin, in ParcelFileDescriptor stdout,
-            in ParcelFileDescriptor stderr, boolean pty, long size) = 112;
+            in ParcelFileDescriptor stderr, boolean pty, long size,
+            in ParcelFileDescriptor status) = 112;
     // One end of a unix stream socket into the server's axsh sessions, for a helper of the
     // caller's uid (axsh's native daemon). Each byte sent on it carries one connected axsh
     // client socket (SCM_RIGHTS), which the server then serves itself, as on its own socket;

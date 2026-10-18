@@ -7,6 +7,11 @@ import android.system.Os;
 import android.system.OsConstants;
 import android.util.Log;
 
+import java.io.IOException;
+import java.io.OutputStream;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+
 /**
  * Server side of one remote shell, forked on the client's fds. With a PTY it copies between the
  * PTY and the client's pipes; without one the pipes are the shell's stdio and nothing is copied.
@@ -43,6 +48,8 @@ public class PtyHost {
     private final int stdin;
     private final int stdout;
     private final int stderr;
+    /** Gets the exit code once the shell is gone (IAxeronService.newAxshProcess); -1 for none. */
+    private final int status;
     private int pid;
     private int ptmx;
     private volatile int exitCode = Integer.MAX_VALUE;
@@ -50,7 +57,8 @@ public class PtyHost {
     public PtyHost(
             String[] args, String[] env, String dir,
             byte tty,
-            ParcelFileDescriptor stdin, ParcelFileDescriptor stdout, ParcelFileDescriptor stderr) {
+            ParcelFileDescriptor stdin, ParcelFileDescriptor stdout, ParcelFileDescriptor stderr,
+            ParcelFileDescriptor status) {
 
         this.args = args;
         this.env = env;
@@ -59,6 +67,9 @@ public class PtyHost {
         this.stdin = detachFd(stdin);
         this.stdout = detachFd(stdout);
         this.stderr = detachFd(stderr);
+        // Detached like the others: a caller in this process (AxshServer) closing its object
+        // afterwards must not close ours.
+        this.status = detachFd(status);
     }
 
     private static byte[] createCBytesForStringArray(String[] array) {
@@ -133,8 +144,24 @@ public class PtyHost {
         pid = result[0];
         ptmx = result[1];
 
-        waiter = new Thread(() -> exitCode = waitFor(pid), "pty-host-wait-" + pid);
+        waiter = new Thread(() -> {
+            exitCode = waitFor(pid);
+            reportExit(exitCode);
+        }, "pty-host-wait-" + pid);
         waiter.start();
+    }
+
+    /** The exit code to {@link #status}, int32 little-endian, then EOF. */
+    private void reportExit(int code) {
+        if (status < 0) return;
+        byte[] bytes = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(code).array();
+        try (OutputStream out = new ParcelFileDescriptor.AutoCloseOutputStream(
+                ParcelFileDescriptor.adoptFd(status))) {
+            out.write(bytes);
+        } catch (IOException e) {
+            // The caller is gone (EPIPE): nobody is left to tell.
+            Log.d(TAG, "exit code of " + pid + " not delivered: " + e.getMessage());
+        }
     }
 
     public int getPid() {

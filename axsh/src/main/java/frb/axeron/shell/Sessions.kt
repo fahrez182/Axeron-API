@@ -3,6 +3,7 @@ package frb.axeron.shell
 import android.net.LocalServerSocket
 import android.net.LocalSocket
 import android.os.ParcelFileDescriptor
+import android.os.RemoteException
 import android.os.SystemClock
 import android.system.ErrnoException
 import android.system.Os
@@ -93,6 +94,37 @@ class Sessions(private val host: Host) {
         /** struct winsize packed as IAxshProcess.setWindowSize wants it, pixels left 0. */
         internal fun windowSize(rows: Int, cols: Int): Long =
             (rows.toLong() and 0xffff) or ((cols.toLong() and 0xffff) shl 16)
+
+        /**
+         * The exit code from [status], the read end of the pipe given to newAxshProcess; closes
+         * it. EOF without the code: a server from before that parameter (it left the pipe unread)
+         * or a dead one, so ask [remote], which holds one of the old server's binder threads as
+         * before, or fails at once on a dead one.
+         */
+        internal fun awaitExit(status: ParcelFileDescriptor, remote: IAxshProcess): Int {
+            val code = ByteArray(4)
+            val delivered = try {
+                ParcelFileDescriptor.AutoCloseInputStream(status).use { readFully(it, code) }
+            } catch (_: IOException) {
+                false
+            }
+            if (delivered) return ByteBuffer.wrap(code).order(ByteOrder.LITTLE_ENDIAN).int
+            return try {
+                remote.waitFor()
+            } catch (_: RemoteException) {
+                -1 // the server died, and the shell with it
+            }
+        }
+
+        private fun readFully(input: InputStream, buf: ByteArray): Boolean {
+            var off = 0
+            while (off < buf.size) {
+                val n = input.read(buf, off, buf.size - off)
+                if (n < 0) return false
+                off += n
+            }
+            return true
+        }
     }
 
     private val tag get() = host.tag
@@ -200,14 +232,21 @@ class Sessions(private val host: Host) {
                 return
             }
 
-            val process = start(output, axeron, request, received)
-            // Before the relay: holding the client's stdout write end would keep it from ever
-            // seeing EOF once the shell is done.
-            closeAll(received)
-            if (process == null) return
-            writeStatus(output, STATUS_OK, null)
-            Log.i(tag, "session started (uid=$uid, pty=${request.pty}): ${request.argv.joinToString(" ")}")
-            relay(input, output, process)
+            // The server writes the shell's exit code into this pipe's write end.
+            val status = ParcelFileDescriptor.createPipe()
+            try {
+                val process = start(output, axeron, request, received, status[1])
+                // Before the relay: holding the client's stdout write end would keep it from ever
+                // seeing EOF once the shell is done.
+                closeAll(received)
+                if (process == null) return
+                writeStatus(output, STATUS_OK, null)
+                Log.i(tag, "session started (uid=$uid, pty=${request.pty}): ${request.argv.joinToString(" ")}")
+                relay(input, output, process, status[0])
+            } finally {
+                // When the relay never got it; closing twice is harmless.
+                status[0].close()
+            }
         } finally {
             // Early refusals; closing twice is harmless (Os.close invalidates the descriptor).
             closeAll(received)
@@ -218,7 +257,8 @@ class Sessions(private val host: Host) {
         output: OutputStream,
         axeron: IAxeronService,
         request: Request,
-        received: Array<out FileDescriptor>
+        received: Array<out FileDescriptor>,
+        status: ParcelFileDescriptor,
     ): IAxshProcess? {
         val pipes = received.map { ParcelFileDescriptor.dup(it) }
         val launch = {
@@ -227,7 +267,7 @@ class Sessions(private val host: Host) {
             axeron.newAxshProcess(
                 request.argv.toTypedArray(), env, null,
                 pipes[0], pipes[1], pipes.getOrNull(2),
-                request.pty, windowSize(request.rows, request.cols)
+                request.pty, windowSize(request.rows, request.cols), status
             )
         }
         val started = try {
@@ -248,7 +288,8 @@ class Sessions(private val host: Host) {
             Log.w(tag, "remote shell failed to start", e)
             null
         } finally {
-            pipes.forEach {
+            // The server has its own copies now (or took ours: AxshServer's call is local).
+            (pipes + status).forEach {
                 try {
                     it.close()
                 } catch (_: IOException) {
@@ -260,7 +301,12 @@ class Sessions(private val host: Host) {
     }
 
     /** Window changes in, the exit code out; EOF first means the client died. */
-    private fun relay(input: InputStream, output: OutputStream, process: IAxshProcess) {
+    private fun relay(
+        input: InputStream,
+        output: OutputStream,
+        process: IAxshProcess,
+        status: ParcelFileDescriptor,
+    ) {
         val exited = AtomicBoolean(false)
         thread(name = "axsh-session-in", isDaemon = true) {
             try {
@@ -284,12 +330,9 @@ class Sessions(private val host: Host) {
             }
         }
 
-        val code = try {
-            process.waitFor()
-        } catch (e: Exception) {
-            Log.w(tag, "waitFor failed", e)
-            -1
-        }
+        // Read here, not waited on over binder: a long session (libsu's cached shell) would hold
+        // one of the server's few binder threads for as long as it lives.
+        val code = awaitExit(status, process)
         exited.set(true)
         val frame = ByteBuffer.allocate(5).order(ByteOrder.LITTLE_ENDIAN)
         frame.put(FRAME_EXIT.toByte())
@@ -377,15 +420,5 @@ class Sessions(private val host: Host) {
         val b = ByteArray(len)
         if (!readFully(input, b)) return null
         return String(b, Charsets.UTF_8)
-    }
-
-    private fun readFully(input: InputStream, buf: ByteArray): Boolean {
-        var off = 0
-        while (off < buf.size) {
-            val n = input.read(buf, off, buf.size - off)
-            if (n < 0) return false
-            off += n
-        }
-        return true
     }
 }

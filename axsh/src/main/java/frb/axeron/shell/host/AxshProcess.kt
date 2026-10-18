@@ -16,7 +16,8 @@ class AxshProcess private constructor(private val host: PtyHost) : IAxshProcess.
         /**
          * Starts [cmd] (full argv). Without [pty], [stdin]/[stdout]/[stderr] become its stdio
          * directly ([stderr] null: stdout); with it, they're copied to and from a new PTY and
-         * [stderr] is unused.
+         * [stderr] is unused. [status], if given, gets the exit code (see
+         * IAxeronService.newAxshProcess), so the caller needn't block in [waitFor].
          */
         @JvmStatic
         @JvmOverloads
@@ -29,15 +30,16 @@ class AxshProcess private constructor(private val host: PtyHost) : IAxshProcess.
             stderr: ParcelFileDescriptor?,
             pty: Boolean,
             size: Long,
+            status: ParcelFileDescriptor?,
             /** The caller's app record: when it dies, the shell goes too (as newProcess does). */
             owner: IBinder? = null
         ): AxshProcess {
             require(cmd.isNotEmpty()) { "empty command" }
             val host = if (pty) {
                 stderr?.close()
-                PtyHost(cmd, env, dir, PtyHost.TTY_ALL, stdin, stdout, null)
+                PtyHost(cmd, env, dir, PtyHost.TTY_ALL, stdin, stdout, null, status)
             } else {
-                PtyHost(cmd, env, dir, 0, stdin, stdout, stderr)
+                PtyHost(cmd, env, dir, 0, stdin, stdout, stderr, status)
             }
             host.start()
             if (pty && size != 0L) host.setWindowSize(size)
