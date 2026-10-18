@@ -177,7 +177,11 @@ bind, even after the app restarts, reaches the same instance and calls `onRebind
   `<package>:shell_shared` or `<package>:shell_daemon`.
 - `ShellService.lastFailure(component)` says why a bind gave `onBindingDied` or `onNullBinding`.
 
-**Not (yet) like libsu**: no `bindOrTask`; user 0 only.
+**Starting the process yourself**: libsu's `bindOrTask` hands back the start command for a shell
+of your choice. Here, set it once for all binds with `ShellService.setLauncher { argv -> … }`,
+which gets the `app_process` argv and returns the started `Process`.
+
+**Not (yet) like libsu**: user 0 only.
 
 ## demo-axsh
 
