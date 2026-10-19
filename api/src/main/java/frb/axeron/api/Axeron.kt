@@ -336,20 +336,23 @@ object Axeron {
      * Runs the server's starter again, in its own session: restarts the server, or replaces one
      * that needs updating. Returns at once; the work goes on in the background. When the starter
      * can't be run (a server from before axsh has no way to), the server is stopped instead, for
-     * the user to start again.
+     * the user to start again, and [onFailed] is run first, on a background thread.
      */
     @JvmStatic
-    fun relaunchServer() {
+    @JvmOverloads
+    fun relaunchServer(onFailed: Runnable? = null) {
         val argv = AxeronCommandSession.getQuickCmd(Starter.internalCommand, true, false)
         Thread({
             val process = try {
                 Axsh.exec(argv)
             } catch (e: IOException) {
                 Log.e(TAG, "relaunchServer, stopping the server", e)
+                onFailed?.run()
                 destroy()
                 return@Thread
             } catch (e: RuntimeException) {
                 Log.e(TAG, "relaunchServer, stopping the server", e)
+                onFailed?.run()
                 destroy()
                 return@Thread
             }
