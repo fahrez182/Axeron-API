@@ -269,13 +269,13 @@ abstract class Service<UserServiceMgr : UserServiceManager,
         LOGGER.i("requestPermission1: uid=%d, pid=%d", callingUid, callingPid)
 
         val entry: ConfigPackageEntry? = configManager.find(callingUid)
-        if (clientRecord != null && entry != null && entry.isAllowed()) {
+        if (clientRecord != null && entry != null && entry.isAllowed) {
             clientRecord.dispatchRequestPermissionResult(requestCode, true)
             return
         }
 
         // Denied in the manager: answer right away, no dialog.
-        if (entry != null && entry.isDenied()) {
+        if (entry != null && entry.isDenied) {
             LOGGER.i("requestPermission: uid=%d is denied", callingUid)
             clientRecord?.dispatchRequestPermissionResult(requestCode, false)
             return
