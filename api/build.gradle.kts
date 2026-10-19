@@ -34,4 +34,4 @@ dependencies {
     implementation(libs.topjohnwu.libsu.core)
 }
 
-extra["publishLibrary"] = true
+// Not published: only AxManager uses it, as a Gradle project. Apps connect through axsh.

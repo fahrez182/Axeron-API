@@ -46,9 +46,9 @@ dependencies {
 }
 ```
 
-Published modules: `api`, `aidl`, `shared`, `provider`, `axsh`. Each brings what it runs on
-(`api`: `aidl`, `shared`, `axsh`; `axsh`: `aidl`, `shared`); declare one yourself only to use
-its classes directly.
+Published modules: `axsh`, and `aidl` and `shared`, which it runs on and brings along; declare
+those two yourself only to use their classes directly. `api` and `provider` are AxManager's own
+and aren't published past 2.0.0 (releases up to it still have them on JitPack).
 
 ### As Gradle projects, or from Maven local
 

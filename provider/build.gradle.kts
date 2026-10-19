@@ -23,4 +23,4 @@ dependencies {
     implementation(libs.androidx.annotation)
 }
 
-extra["publishLibrary"] = true
+// Not published: only AxManager uses it, as a Gradle project. Apps connect through axsh.
