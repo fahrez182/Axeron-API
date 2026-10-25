@@ -45,6 +45,15 @@ object Axeron {
     private var axeronInfo: AxeronInfo? = null
     private var binderReady = false
 
+    /**
+     * Skips the ignite the next server's binder would start, once. Set before a restart that
+     * runs the igniter itself, with its output shown, so the two don't run at once.
+     */
+    @Volatile
+    @JvmStatic
+    @RestrictTo(LIBRARY_GROUP_PREFIX)
+    var suppressAutoIgnite = false
+
     private var permissionGranted = false
     private var shouldShowRequestPermissionRationale = false
 
@@ -57,7 +66,10 @@ object Axeron {
 
             scheduleBinderReceivedListeners()
 
-            if (isFirstInit(false) || AxeronSettings.getEnableIgniteRelog()) {
+            // Taken once: a restart that ignites in view of the user (see suppressAutoIgnite).
+            if (suppressAutoIgnite) {
+                suppressAutoIgnite = false
+            } else if (isFirstInit(false) || AxeronSettings.getEnableIgniteRelog()) {
                 Log.d(TAG, "igniteService")
                 AxeronPluginService.igniteService()
             }
@@ -340,7 +352,13 @@ object Axeron {
      */
     @JvmStatic
     @JvmOverloads
-    fun relaunchServer(onFailed: Runnable? = null) {
+    fun relaunchServer(onFailed: Runnable? = null) = relaunch(onFailed, null)
+
+    /** As [relaunchServer], with the starter's output to [onOutput] line by line (true for stderr), from its reader threads. */
+    @JvmStatic
+    fun relaunchServer(onFailed: Runnable?, onOutput: (String, Boolean) -> Unit) = relaunch(onFailed, onOutput)
+
+    private fun relaunch(onFailed: Runnable?, onOutput: ((String, Boolean) -> Unit)?) {
         val argv = AxeronCommandSession.getQuickCmd(Starter.internalCommand, true, false)
         Thread({
             val process = try {
@@ -357,18 +375,23 @@ object Axeron {
                 return@Thread
             }
             // Drained, not closed: the starter writes as it goes, and a closed pipe would end it.
-            drain(process.inputStream)
-            drain(process.errorStream)
+            drain(process.inputStream, onOutput?.let { out -> { line: String -> out(line, false) } })
+            drain(process.errorStream, onOutput?.let { out -> { line: String -> out(line, true) } })
         }, "AxeronRelaunch").start()
     }
 
-    private fun drain(stream: InputStream) {
+    /** Reads [stream] to its end, handing each line to [onLine] or discarding it. */
+    private fun drain(stream: InputStream, onLine: ((String) -> Unit)?) {
         Thread({
-            val buffer = ByteArray(4096)
             try {
                 stream.use {
-                    while (it.read(buffer) != -1) {
-                        // discard
+                    if (onLine != null) {
+                        it.bufferedReader().forEachLine(onLine)
+                    } else {
+                        val buffer = ByteArray(4096)
+                        while (it.read(buffer) != -1) {
+                            // discard
+                        }
                     }
                 }
             } catch (ignored: IOException) {

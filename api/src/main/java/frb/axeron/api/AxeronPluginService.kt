@@ -620,6 +620,27 @@ object AxeronPluginService {
             result.isSuccess()
         }
 
+    /**
+     * Stops every plugin's processes, as the server's death watchdog does when it dies with the
+     * stop-plugins setting on; run before a shutdown or restart from AxManager, so the watchdog
+     * finds nothing left and can't race the igniter of the next server. Cancelling the caller
+     * kills the igniter, leaving the plugins it hadn't reached running.
+     */
+    suspend fun stopAllPlugins(
+        onStdout: (String) -> Unit = {},
+        onStderr: (String) -> Unit = {}
+    ): Boolean = withContext(Dispatchers.IO) {
+        val cmd = "CLASSPATH=$IGNITER; app_process / frb.axeron.reignite.Igniter --stop-all"
+        val result = execProcessSafe(
+            arrayOf(BUSYBOX, "sh", "-c", cmd),
+            Axeron.getEnvironment(),
+            onStdout,
+            onStderr
+        )
+        if (!result.isSuccess()) onStderr("! Igniter exited with ${result.exitCode}\n")
+        result.isSuccess()
+    }
+
 
     suspend fun removeScripts() = withContext(Dispatchers.IO) {
         val fs = axFS ?: return@withContext
