@@ -11,6 +11,8 @@
 #include "logging.h"
 #include "pts.h"
 
+extern char **environ;
+
 /**
  * In the child, just before exec: the shell keeps stdin, stdout and stderr and nothing else of
  * ours. Every fd the server has open is inherited otherwise, and outlives the server in each
@@ -320,7 +322,12 @@ static jintArray RishHost_startHost(
         close_inherited_fds();
 
         if (envv) {
-            execvpe(argv[0], (char *const *) argv, (char *const *) envv);
+            // execvpe looks argv[0] up in getenv("PATH"), the server's own PATH, not envv's: a
+            // bare command would ignore the PATH order it was given (preferSystemBinaries).
+            // Making envv our environ first has execvp search and pass on the same one. No
+            // allocation, so it's safe in a child forked from a threaded process.
+            environ = (char **) envv;
+            execvp(argv[0], (char *const *) argv);
         } else {
             execvp(argv[0], (char *const *) argv);
         }
