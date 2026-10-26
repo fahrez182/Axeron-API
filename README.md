@@ -42,13 +42,15 @@ Then the modules you need, at a release tag (or a commit hash, or `main-SNAPSHOT
 ```kotlin
 // build.gradle.kts
 dependencies {
-    implementation("com.github.fahrez182.Axeron-API:axsh:2.0.0")
+    implementation("com.github.fahrez182.Axeron-API:axsh:2.1.0")
+    implementation("com.github.fahrez182.Axeron-API:aidl:2.1.0")
+    implementation("com.github.fahrez182.Axeron-API:shared:2.1.0")
 }
 ```
 
-Published modules: `axsh`, and `aidl` and `shared`, which it runs on and brings along; declare
-those two yourself only to use their classes directly. `api` and `provider` are AxManager's own
-and aren't published past 2.0.0 (releases up to it still have them on JitPack).
+Published modules: `axsh`, and `aidl` and `shared`, which it runs on: declare all three, at the
+same version. `api` and `provider` are AxManager's own and aren't published past 2.0.0 (releases
+up to it still have them on JitPack).
 
 ### As Gradle projects, or from Maven local
 
@@ -60,8 +62,15 @@ depend on them from there:
 ```
 
 ```kotlin
-// group dev.frb.axeron, version = api_version_code from manifest.gradle.kts (20000 for 2.0.0)
-implementation("dev.frb.axeron:axsh:20000")
+// settings.gradle.kts: mavenLocal() in dependencyResolutionManagement.repositories
+
+// build.gradle.kts
+// group dev.frb.axeron, version = api_version_code from manifest.gradle.kts (21000 for 2.1.0)
+dependencies {
+    implementation("dev.frb.axeron:axsh:21000")
+    implementation("dev.frb.axeron:aidl:21000")
+    implementation("dev.frb.axeron:shared:21000")
+}
 ```
 
 Every app needs AxManager's permission (Allowed, Ask or Denied in AxManager's Privilege page).
@@ -95,7 +104,9 @@ its Privilege details) sets how long it stays: smart (default, 5 idle minutes), 
 
 ```kotlin
 // build.gradle.kts
-implementation(project(":axsh"))           // or the Maven artifact
+implementation(project(":axsh"))           // or the Maven artifacts, with aidl and shared
+implementation(project(":aidl"))
+implementation(project(":shared"))
 android {
     packaging { jniLibs { useLegacyPackaging = true } }   // libaxsh.so is exec'd
 }
