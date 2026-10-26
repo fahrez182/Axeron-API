@@ -17,11 +17,8 @@ import frb.axeron.server.util.OsUtils
 import frb.axeron.server.util.UserHandleCompat
 import frb.axeron.shared.AxeronApiConstant
 import frb.axeron.shared.PathHelper
-import frb.axeron.shared.ShizukuApiConstant.ATTACH_APPLICATION_API_VERSION
-import frb.axeron.shared.ShizukuApiConstant.ATTACH_APPLICATION_PACKAGE_NAME
 import frb.axeron.shared.ShizukuApiConstant.BINDER_TRANSACTION_transact
 import frb.axeron.shared.ShizukuApiConstant.SHIZUKU_SERVER_VERSION
-import moe.shizuku.server.IShizukuApplication
 import moe.shizuku.server.IShizukuServiceConnection
 import rikka.hidden.compat.PackageManagerApis
 import rikka.hidden.compat.PermissionManagerApis
@@ -499,21 +496,14 @@ abstract class Service<UserServiceMgr : UserServiceManager,
         exitProcess(0)
     }
 
+    // No legacy attachApplication (raw code 14) here: that one is Shizuku's, served by
+    // ShizukuServiceIntercept on the Shizuku binder. On this binder 14 is setNewEnvironment, which
+    // it swallowed: the env read as a binder and a package name, and "no exception" sent back.
     @Throws(RemoteException::class)
     override fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
         if (code == BINDER_TRANSACTION_transact) {
             data.enforceInterface(AxeronApiConstant.server.BINDER_DESCRIPTOR)
             transactRemote(data, reply, flags)
-            return true
-        } else if (code == 14) {
-            data.enforceInterface(AxeronApiConstant.server.BINDER_DESCRIPTOR)
-            val binder = data.readStrongBinder()
-            val packageName = data.readString()
-            val args = Bundle()
-            args.putString(ATTACH_APPLICATION_PACKAGE_NAME, packageName)
-            args.putInt(ATTACH_APPLICATION_API_VERSION, -1)
-            attachApplication(IShizukuApplication.Stub.asInterface(binder), args)
-            reply!!.writeNoException()
             return true
         }
         return super.onTransact(code, data, reply, flags)
