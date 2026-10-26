@@ -16,6 +16,15 @@ object AxeronApiConstant {
         const val TYPE_DEFAULT_ENV = -1
         const val TYPE_ENV = 0
         const val TYPE_NEW_ENV = 1
+
+        /**
+         * Path lists of the default env (TYPE_DEFAULT_ENV) that the user's env may only add to:
+         * its value keeps `$NAME` for the default, which is put in front when it is missing.
+         * Every other default variable is the server's or the system's, and the user's env
+         * can't change it.
+         */
+        @JvmField
+        val APPEND_ONLY_ENV = setOf("PATH", "LD_LIBRARY_PATH")
     }
 
     object folder {
