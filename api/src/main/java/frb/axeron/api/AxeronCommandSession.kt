@@ -91,7 +91,73 @@ class AxeronCommandSession {
     }
 
     private fun errorListener(error: String) {
-        if (resultListener != null) mainHandler.post { resultListener?.onError(error) }
+        if (resultListener != null) post { resultListener?.onError(error) }
+    }
+
+    // ---- delivery to the listeners: in order, on the main thread ----
+    // Output is merged into one main-thread message per turn instead of one per read, and a
+    // reader waits while too much is still undelivered. Posting every read let a flood (dumpsys,
+    // a million lines) outrun a busy main thread and pile up in its queue until the app ran out
+    // of memory; waiting holds the process back through its pipe instead. Events share the
+    // queue, so they stay in order with the output around them.
+
+    private class Text(val error: Boolean) {
+        val text = StringBuilder()
+    }
+
+    @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
+    private val mailLock = java.lang.Object()
+
+    /** [Text]s and event [Runnable]s, oldest first. Guarded by [mailLock]. */
+    private val mailbox = ArrayDeque<Any>()
+    private var pendingChars = 0
+    private var drainPosted = false
+
+    private val drain = Runnable {
+        val batch = synchronized(mailLock) {
+            drainPosted = false
+            pendingChars = 0
+            mailLock.notifyAll()
+            ArrayList(mailbox).also { mailbox.clear() }
+        }
+        for (item in batch) {
+            when (item) {
+                is Text -> resultListener?.let {
+                    if (item.error) it.onError(item.text.toString()) else it.output(item.text.toString())
+                }
+                is Runnable -> item.run()
+            }
+        }
+    }
+
+    private fun post(event: Runnable) {
+        synchronized(mailLock) {
+            mailbox.addLast(event)
+            scheduleDrain()
+        }
+    }
+
+    /** From a reader thread only: it may wait here for the main thread to catch up. */
+    private fun postText(text: String, error: Boolean) {
+        synchronized(mailLock) {
+            try {
+                while (pendingChars >= MAX_PENDING_CHARS) mailLock.wait()
+            } catch (e: InterruptedException) {
+                return
+            }
+            val last = mailbox.lastOrNull()
+            val into = if (last is Text && last.error == error) last else Text(error).also { mailbox.addLast(it) }
+            into.text.append(text)
+            pendingChars += text.length
+            scheduleDrain()
+        }
+    }
+
+    private fun scheduleDrain() {
+        if (!drainPosted) {
+            drainPosted = true
+            mainHandler.post(drain)
+        }
     }
 
     /**
@@ -185,7 +251,7 @@ class AxeronCommandSession {
                                 started = true
                                 processListener?.let { listener ->
                                     val p = pid
-                                    mainHandler.post { listener.onProcessCreated(p, command) }
+                                    post { listener.onProcessCreated(p, command) }
                                 }
                                 if (early.isNotEmpty()) {
                                     output(early.toString())
@@ -203,10 +269,7 @@ class AxeronCommandSession {
                         part = part.substring(0, bg.start()) + part.substring(bg.end())
                         bgMarkSeen.countDown()
                     }
-                    if (part.isNotEmpty() && resultListener != null) {
-                        val error = part
-                        mainHandler.post { resultListener?.onError(error) }
-                    }
+                    if (part.isNotEmpty() && resultListener != null) postText(part, error = true)
                 }
             } catch (e: IOException) {
                 errorListener("stderr: " + e.message)
@@ -238,7 +301,7 @@ class AxeronCommandSession {
             } else if (leftRunning && backgroundPid > 0) {
                 processListener?.let { listener ->
                     val pids = intArrayOf(backgroundPid)
-                    mainHandler.post { listener.onProcessBackground(pids) }
+                    post { listener.onProcessBackground(pids) }
                 }
             }
 
@@ -255,7 +318,7 @@ class AxeronCommandSession {
             if (wasStarted) {
                 processListener?.let { listener ->
                     val last = lastOutput.get()
-                    mainHandler.post { listener.onProcessFinished(code, last) }
+                    post { listener.onProcessFinished(code, last) }
                 }
             }
         }
@@ -263,7 +326,7 @@ class AxeronCommandSession {
         private fun output(part: String) {
             if (resultListener == null) return
             lastOutput.set(part)
-            mainHandler.post { resultListener?.output(part) }
+            postText(part, error = false)
         }
     }
 
@@ -291,6 +354,9 @@ class AxeronCommandSession {
         /** Written to stderr by the command shell's EXIT trap, followed by its `$!`. */
         private const val BG_MARK = "__axeron_bg__="
         private val BG_LINE: Pattern = Pattern.compile("(?m)^$BG_MARK(\\d*)[ \\t]*(?:\\r?\\n|$)")
+
+        /** Undelivered output past which the readers wait (chars; about 1 MB). */
+        private const val MAX_PENDING_CHARS = 512 * 1024
 
         /** How long to wait for the EXIT trap's line once the shell is gone. */
         private const val BG_MARK_WAIT_MS = 500L
