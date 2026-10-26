@@ -43,14 +43,16 @@ Then the modules you need, at a release tag (or a commit hash, or `main-SNAPSHOT
 // build.gradle.kts
 dependencies {
     implementation("com.github.fahrez182.Axeron-API:axsh:2.1.0")
-    implementation("com.github.fahrez182.Axeron-API:aidl:2.1.0")
-    implementation("com.github.fahrez182.Axeron-API:shared:2.1.0")
+    // axsh brings these two along at runtime, and its own API (Broker, Axsh, ShellService) uses
+    // none of their types. Add them, at the same version, only to use their classes directly
+    // (IAxeronService, AxeronApiConstant, …).
+    // implementation("com.github.fahrez182.Axeron-API:aidl:2.1.0")
+    // implementation("com.github.fahrez182.Axeron-API:shared:2.1.0")
 }
 ```
 
-Published modules: `axsh`, and `aidl` and `shared`, which it runs on: declare all three, at the
-same version. `api` and `provider` are AxManager's own and aren't published past 2.0.0 (releases
-up to it still have them on JitPack).
+Published modules: `axsh`, and `aidl` and `shared`, which it runs on. `api` and `provider` are
+AxManager's own and aren't published past 2.0.0 (releases up to it still have them on JitPack).
 
 ### As Gradle projects, or from Maven local
 
@@ -68,8 +70,9 @@ depend on them from there:
 // group dev.frb.axeron, version = api_version_code from manifest.gradle.kts (21000 for 2.1.0)
 dependencies {
     implementation("dev.frb.axeron:axsh:21000")
-    implementation("dev.frb.axeron:aidl:21000")
-    implementation("dev.frb.axeron:shared:21000")
+    // As from JitPack: only to use their classes directly.
+    // implementation("dev.frb.axeron:aidl:21000")
+    // implementation("dev.frb.axeron:shared:21000")
 }
 ```
 
@@ -104,12 +107,7 @@ its Privilege details) sets how long it stays: smart (default, 5 idle minutes), 
 
 ```kotlin
 // build.gradle.kts
-implementation(project(":axsh"))           // or the Maven artifacts, with aidl and shared
-implementation(project(":aidl"))
-implementation(project(":shared"))
-android {
-    packaging { jniLibs { useLegacyPackaging = true } }   // libaxsh.so is exec'd
-}
+implementation(project(":axsh"))   // or the Maven artifact (see Using it)
 ```
 
 ```kotlin
@@ -121,15 +119,41 @@ class App : Application() {
         Broker.start(this)   // listens on @axsh.<uid>, in this process
     }
 }
+```
 
+The broker fetches the binder once and keeps it. An app that already holds the binder passes it:
+`Broker.start(this) { Axeron.getBinder() }`. Then run commands one of two ways:
+
+**`Axsh`, in this process.** A shell on the server as a `java.lang.Process`, from one binder call:
+nothing is exec'd, so there is nothing to extract. Call it off the main thread.
+
+```kotlin
+import frb.axeron.shell.Axsh
+
+val process = Axsh.newProcess("-c", "id")             // sh's arguments; none for a shell on stdin
+val run = Axsh.exec(arrayOf("ls", "-l"), dir = "/")   // a program as it is, no shell around it
+val term = Axsh.newTerminal(rows = 24, cols = 80)     // on a PTY: setWindowSize() when it resizes
+```
+
+For libsu: `Shell.Builder.create().build(Axsh.newProcess())`.
+
+**Your own `libaxsh.so`, as a program.** For what takes a binary rather than a `Process`: a terminal
+emulator, libsu's `setCommands`, another process. The broker serves each run of it from this
+process, so a command costs a socket connect and one binder call. It is exec'd from the native
+library folder, so it must be extracted there:
+
+```kotlin
+// build.gradle.kts: only when you run libaxsh.so yourself
+android {
+    packaging { jniLibs { useLegacyPackaging = true } }
+}
+```
+
+```kotlin
 val axsh = File(applicationInfo.nativeLibraryDir, "libaxsh.so")
 ```
 
-The broker fetches the binder once and serves every later `libaxsh.so` run of this app from the
-running process, so a command costs a socket connect and one binder call. An app that already
-holds the binder passes it: `Broker.start(this) { Axeron.getBinder() }`.
-
-### Either way
+### Running `libaxsh.so`, AxManager's or your own
 
 `libaxsh.so` takes `sh`'s arguments. Without a terminal its pipes become the remote shell's stdio
 (separate stdout and stderr, the shell's exit code); in a terminal it opens a PTY. It works as a
@@ -143,8 +167,8 @@ Shell.setDefaultBuilder(Shell.Builder.create().setCommands(axsh.path))
 
 libsu's `RootService`, but through axsh, so it works in ADB mode too. Your service class runs in
 an `app_process` started as the server's uid (2000 in ADB mode, 0 with root), loaded from your
-APK. Needs the `axsh` module; `Broker.start` is optional (without it, AxManager's `libaxsh.so`
-starts the process).
+APK. Needs the `axsh` module, but not `useLegacyPackaging`: with `Broker.start` the process starts
+through `Axsh.exec`, without it through AxManager's `libaxsh.so`, never through your own.
 
 An AIDL interface, as for any bound service:
 
