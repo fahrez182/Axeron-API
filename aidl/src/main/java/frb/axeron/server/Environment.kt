@@ -57,8 +57,10 @@ class Environment : Parcelable {
         private val envMap: MutableMap<String, String> = if (newEnv) HashMap() else systemEnvMap
 
         /**
-         * Sets [key], with `$VAR` in [value] replaced from this env, then the system's. A null
-         * value removes the key (the Java class stored it and then failed in [build]).
+         * Sets [key], with `$VAR` in [value] replaced from this env, then the system's. A `$VAR`
+         * found in neither stays as it is: a `$` meant literally (a regex, a password) isn't
+         * lost. A null value removes the key (the Java class stored it and then failed in
+         * [build]).
          */
         fun put(key: String, value: String?): Builder {
             if (value == null) {
@@ -69,11 +71,17 @@ class Environment : Parcelable {
             val sb = StringBuffer()
             while (matcher.find()) {
                 val name = matcher.group(1)
-                val replacement = envMap[name] ?: systemEnvMap[name] ?: ""
+                val replacement = envMap[name] ?: systemEnvMap[name] ?: matcher.group()
                 matcher.appendReplacement(sb, Matcher.quoteReplacement(replacement))
             }
             matcher.appendTail(sb)
             envMap[key] = sb.toString()
+            return this
+        }
+
+        /** Sets every entry of [map] as it is, without replacing `$VAR`: values already built. */
+        fun putAllRaw(map: Map<String, String>): Builder {
+            envMap.putAll(map)
             return this
         }
 
@@ -91,10 +99,23 @@ class Environment : Parcelable {
             return this
         }
 
+        /**
+         * [put] for each entry. One that refers to another entry of [map] is set after it, so
+         * `A=$B` takes the B of [map] whatever their order; in a cycle, the entry met first
+         * takes the other's previous value. `$KEY` in KEY's own value is its previous value.
+         */
         fun putAll(map: Map<String, String>): Builder {
-            for ((key, value) in map) {
+            val pending = LinkedHashMap(map)
+            fun putPending(key: String) {
+                val value = pending.remove(key) ?: return
+                val matcher = VARIABLE.matcher(value)
+                while (matcher.find()) {
+                    val name = matcher.group(1)
+                    if (name != key) putPending(name)
+                }
                 put(key, value)
             }
+            while (pending.isNotEmpty()) putPending(pending.keys.first())
             return this
         }
 
