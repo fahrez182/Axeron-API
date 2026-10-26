@@ -1,3 +1,6 @@
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -25,6 +28,16 @@ android {
         buildConfig = true
         // IUserService, the demo services' interface.
         aidl = true
+    }
+    // Named like the manager's APKs, so a release says which API version it was built from.
+    applicationVariants.all {
+        val ts = LocalDateTime.now()
+            .format(DateTimeFormatter.ofPattern("yyMMddHHmm"))
+        outputs.all {
+            val outputImpl = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
+            outputImpl.outputFileName =
+                "DemoAxsh_v${versionName}_${versionCode}-${buildType.name}_$ts.apk"
+        }
     }
     packaging {
         // libaxsh.so is exec'd, so it must be extracted to nativeLibraryDir.
