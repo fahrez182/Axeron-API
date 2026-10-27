@@ -7,7 +7,6 @@ import android.content.pm.PackageManager
 import android.util.Log
 import com.topjohnwu.superuser.Shell
 import frb.axeron.shell.AxBroker
-import frb.axeron.shell.Broker
 import java.io.File
 import kotlin.system.exitProcess
 
@@ -29,7 +28,7 @@ class App : Application() {
         app = this
         directConnection = prefs(this).getBoolean(KEY_DIRECT_CONNECTION, DEFAULT_DIRECT_CONNECTION)
 
-        if (directConnection) Broker.start(this)
+        if (directConnection) AxBroker.start(this)
         axsh = if (directConnection) ownAxsh() else managerAxsh()
         Log.i(TAG, "direct=$directConnection axsh=${axsh?.absolutePath} (exists=${axsh?.exists()})")
 

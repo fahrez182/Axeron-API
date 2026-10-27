@@ -64,17 +64,23 @@ object AxBroker : Sessions.Host {
      *   must not use the broadcast: its own receiver would wait behind a main thread that may be
      *   blocked on the very shell being started.
      */
-    @Synchronized
+    @JvmStatic
+    @JvmOverloads
     fun start(context: Context, binder: (() -> IBinder?)? = null) {
-        // From Application.attachBaseContext, applicationContext is still null (the app isn't
-        // registered yet); the Application itself is the context to keep then.
-        val appContext = context.applicationContext ?: context
-        sendRequest = { appContext.sendBroadcast(it) }
-        packageName = context.packageName
-        binderSource = binder
-        sessions.listen(socketName())
+        // On the object, as @Synchronized was before @JvmStatic (which would lock the class):
+        // the same monitor service() takes.
+        synchronized(this) {
+            // From Application.attachBaseContext, applicationContext is still null (the app isn't
+            // registered yet); the Application itself is the context to keep then.
+            val appContext = context.applicationContext ?: context
+            sendRequest = { appContext.sendBroadcast(it) }
+            packageName = context.packageName
+            binderSource = binder
+            sessions.listen(socketName())
+        }
     }
 
+    @JvmStatic
     fun stop() = sessions.stop()
 
     /**
