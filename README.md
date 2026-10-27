@@ -176,6 +176,30 @@ Shell.setDefaultBuilder(Shell.Builder.create().setCommands(axsh.path))
 val shell = Shell.Builder.create().build(Axsh.newProcess())   // no libaxsh.so to run
 ```
 
+### From Java
+
+`AxBroker`, `Axsh` and `AxShellService` are called statically from Java; `Axsh`'s calls throw a
+checked `IOException`:
+
+```java
+AxBroker.start(this);                                   // in Application.onCreate()
+AxBroker.start(this, () -> binder);                     // a host that holds the binder
+
+Process process = Axsh.newProcess("-c", "pm list packages");
+Process run = Axsh.exec(new String[]{"ls", "-l"}, null, "/");
+
+public class MyService extends AxShellService {
+    @Override
+    public IBinder onBind(Intent intent) { /* … */ }
+}
+
+AxShellService.bind(new Intent(context, MyService.class), connection);
+AxShellService.setLauncher(argv -> Runtime.getRuntime().exec(argv));
+```
+
+`Broker` and `ShellService`, the names up to 2.1.0, are Kotlin typealiases: Java uses the `Ax`
+names. Java isn't checked against `InternalAxeronApi`, so keep to these three.
+
 ## AxShellService: your own code as shell or root
 
 libsu's `RootService`, but through axsh, so it works in ADB mode too. Your service class runs in
