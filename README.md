@@ -42,11 +42,11 @@ Then the modules you need, at a release tag (or a commit hash, or `main-SNAPSHOT
 ```kotlin
 // build.gradle.kts
 dependencies {
-    implementation("com.github.fahrez182.Axeron-API:axsh:2.1.0")
+    implementation("com.github.fahrez182.Axeron-API:axsh:2.1.1")
     // axsh brings aidl along at runtime, and its own API (AxBroker, Axsh, AxShellService) uses
     // none of its types. Add it, at the same version, only to call the server's binder
     // interfaces directly (IAxeronService, …).
-    // implementation("com.github.fahrez182.Axeron-API:aidl:2.1.0")
+    // implementation("com.github.fahrez182.Axeron-API:aidl:2.1.1")
 }
 ```
 
@@ -72,11 +72,11 @@ depend on them from there:
 // settings.gradle.kts: mavenLocal() in dependencyResolutionManagement.repositories
 
 // build.gradle.kts
-// group dev.frb.axeron, version = api_version_code from manifest.gradle.kts (21000 for 2.1.0)
+// group dev.frb.axeron, version = api_version_code from manifest.gradle.kts (21100 for 2.1.1)
 dependencies {
-    implementation("dev.frb.axeron:axsh:21000")
+    implementation("dev.frb.axeron:axsh:21100")
     // As from JitPack: only to call the server's binder interfaces directly.
-    // implementation("dev.frb.axeron:aidl:21000")
+    // implementation("dev.frb.axeron:aidl:21100")
 }
 ```
 
