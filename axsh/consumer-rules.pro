@@ -9,11 +9,11 @@
 -dontwarn android.ddm.**
 -dontwarn com.android.internal.**
 
-# ShellService: app_process starts the remote side by name, which makes the service by name.
+# AxShellService: app_process starts the remote side by name, which makes the service by name.
 -keep class frb.axeron.shell.ShellServiceRemote {
     public static void main(java.lang.String[]);
 }
--keep class * extends frb.axeron.shell.ShellService {
+-keep class * extends frb.axeron.shell.AxShellService {
     <init>();
 }
 

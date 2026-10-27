@@ -23,13 +23,14 @@ import kotlin.concurrent.thread
 
 /**
  * The axsh session protocol, for every place that serves it: the server's own socket
- * (AxshServer), an app's [Broker] and [Bootstrap]. They differ only in [Host].
+ * (AxshServer), an app's [AxBroker] and [Bootstrap]. They differ only in [Host].
  *
  * The client always brings its own pipes (SCM_RIGHTS on the handshake's first byte) and the
  * shell is started on them with [IAxeronService.newAxshProcess]: without a PTY they are its
  * stdio as they are, so no byte passes through here or through the server. The socket then only
  * carries FRAME_WINCH in and one FRAME_EXIT out. Wire format: `src/main/cpp/axsh_protocol.h`.
  */
+@InternalAxeronApi
 class Sessions(private val host: Host) {
 
     interface Host {

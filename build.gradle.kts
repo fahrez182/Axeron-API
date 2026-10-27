@@ -61,6 +61,10 @@ subprojects {
         extensions.configure<KotlinAndroidProjectExtension> {
             compilerOptions {
                 jvmTarget.set(JvmTarget.JVM_21)
+                // The libraries use their own AxManager-only API; demo-axsh, an app, must not.
+                if (pluginManager.hasPlugin("com.android.library")) {
+                    optIn.add("frb.axeron.shell.InternalAxeronApi")
+                }
             }
         }
     }

@@ -29,8 +29,9 @@ import java.util.concurrent.TimeUnit
  * same way axerish got it: an `AxRuntime.REQUEST_BINDER` broadcast answered by
  * the manager's `ShellBinderRequestHandler`.
  */
-object Broker : Sessions.Host {
+object AxBroker : Sessions.Host {
 
+    @InternalAxeronApi
     override val tag = "AxshBroker"
 
     // Mirrors ServerConstants.REQUEST_BINDER_AXRUNTIME and the manager's package.
@@ -54,6 +55,7 @@ object Broker : Sessions.Host {
     private var service: IAxeronService? = null
 
     /** Abstract socket name the native client looks for; per-uid so apps never share a broker. */
+    @InternalAxeronApi
     fun socketName(uid: Int = Process.myUid()) = "axsh.$uid"
 
     /**
@@ -108,9 +110,11 @@ object Broker : Sessions.Host {
     // ---- Sessions.Host ----
 
     // The broker spends this app's AxManager grant, so only this app's own processes may use it.
+    @InternalAxeronApi
     override fun refuse(uid: Int, pid: Int): String? =
         if (uid == Process.myUid()) null else "Not this app's process"
 
+    @InternalAxeronApi
     override fun service(): IAxeronService? {
         binderSource?.let { source ->
             return source()?.takeIf { it.pingBinder() }?.let { IAxeronService.Stub.asInterface(it) }
@@ -161,6 +165,7 @@ object Broker : Sessions.Host {
         }
     }
 
+    @InternalAxeronApi
     override fun awaitPermission(service: IAxeronService): Boolean {
         var ask = false
         val wait = synchronized(permissionLock) {
@@ -271,3 +276,7 @@ object Broker : Sessions.Host {
         return binder
     }
 }
+
+/** The name up to 2.1.0; renamed so the public API all starts with Ax. */
+@Deprecated("Renamed to AxBroker", ReplaceWith("AxBroker", "frb.axeron.shell.AxBroker"))
+typealias Broker = AxBroker

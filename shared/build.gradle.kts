@@ -36,4 +36,4 @@ dependencies {
     implementation(libs.androidx.annotation.jvm)
 }
 
-extra["publishLibrary"] = true
+// Not published: axsh only inlines its constants (see axsh's build), and it is AxManager's own.

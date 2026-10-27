@@ -47,11 +47,11 @@ import kotlin.system.exitProcess
  * POC: libsu's RootService for AxManager, used the same way, in ADB mode as well as root.
  *
  * ```
- * class MyService : ShellService() {
+ * class MyService : AxShellService() {
  *     override fun onBind(intent: Intent): IBinder = object : IMyService.Stub() { … }
  * }
- * ShellService.bind(Intent(context, MyService::class.java), connection)   // main thread
- * ShellService.unbind(connection)
+ * AxShellService.bind(Intent(context, MyService::class.java), connection)   // main thread
+ * AxShellService.unbind(connection)
  * ```
  *
  * As RootService's, an app's services share one `app_process`, started through axsh
@@ -67,7 +67,7 @@ import kotlin.system.exitProcess
  * read), and it hands its binder in through [ShellServiceProvider], which checks the caller's uid
  * (not a broadcast needing BROADCAST_PACKAGE_REMOVED).
  */
-abstract class ShellService : ContextWrapper(null) {
+abstract class AxShellService : ContextWrapper(null) {
 
     open fun onCreate() {}
 
@@ -139,7 +139,7 @@ abstract class ShellService : ContextWrapper(null) {
         fun lastFailure(component: ComponentName): String? = ShellServiceClient.failures[component]
 
         /**
-         * Default: [Axsh.exec] through this app's Broker; while none runs, the manager's
+         * Default: [Axsh.exec] through this app's AxBroker; while none runs, the manager's
          * `libaxsh.so -c`.
          */
         @JvmStatic
@@ -156,7 +156,7 @@ abstract class ShellService : ContextWrapper(null) {
  * sent to a process goes through its [Proc.queue], in order.
  */
 internal object ShellServiceClient {
-    private const val TAG = "ShellService"
+    private const val TAG = "AxShellService"
 
     const val AUTHORITY_SUFFIX = ".shellservice"
     const val METHOD_ATTACH = "attach"
@@ -189,7 +189,7 @@ internal object ShellServiceClient {
     private val main = Handler(Looper.getMainLooper())
     val mainExecutor = Executor { main.post(it) }
 
-    // Mirrors Broker's.
+    // Mirrors AxBroker's.
     private const val MANAGER_PACKAGE = "frb.axeron.manager"
 
     /**
@@ -212,10 +212,10 @@ internal object ShellServiceClient {
     }
 
     @Volatile
-    var launcher = ShellService.Launcher(::defaultLaunch)
+    var launcher = AxShellService.Launcher(::defaultLaunch)
 
     /**
-     * Broker has no "running" state of its own: without [Broker.start] it has no way to the binder,
+     * AxBroker has no "running" state of its own: without [AxBroker.start] it has no way to the binder,
      * and [Axsh.exec] says so at once with an IOException. Then as a no-broker app does, through
      * the manager's libaxsh.so (its bootstrap asks the manager for the binder itself).
      */
@@ -291,7 +291,7 @@ internal object ShellServiceClient {
     /** Processes waiting to hand in their control binder; read from the provider. */
     private val starting = ConcurrentHashMap<String, Proc>()
 
-    private fun isDaemon(intent: Intent) = intent.hasCategory(ShellService.CATEGORY_DAEMON_MODE)
+    private fun isDaemon(intent: Intent) = intent.hasCategory(AxShellService.CATEGORY_DAEMON_MODE)
 
     fun bind(intent: Intent, executor: Executor, connection: ServiceConnection) {
         checkMainThread()
@@ -543,20 +543,21 @@ internal object ShellServiceClient {
     }
 
     private fun checkMainThread() =
-        check(Looper.myLooper() == Looper.getMainLooper()) { "ShellService.bind/unbind/stop: main thread only" }
+        check(Looper.myLooper() == Looper.getMainLooper()) { "AxShellService.bind/unbind/stop: main thread only" }
 }
 
 /**
  * Where a service process hands in its control binder. Exported, so it takes calls only from the
  * server's uids (root, shell) and only with a token one of our binds is waiting on.
  */
+@InternalAxeronApi
 class ShellServiceProvider : ContentProvider() {
 
     override fun call(method: String, arg: String?, extras: Bundle?): Bundle? {
         if (method != ShellServiceClient.METHOD_ATTACH || extras == null) return null
         val uid = Binder.getCallingUid()
         if (uid != 0 && uid != 2000) { // root, shell
-            Log.w("ShellService", "attach from uid $uid refused")
+            Log.w("AxShellService", "attach from uid $uid refused")
             return null
         }
         val token = extras.getString(ShellServiceClient.EXTRA_TOKEN) ?: return null
@@ -584,7 +585,7 @@ class ShellServiceProvider : ContentProvider() {
  * `stop <class>`. Runs as the server's uid and hosts the app's services of that kind.
  */
 internal object ShellServiceRemote {
-    private const val TAG = "ShellService"
+    private const val TAG = "AxShellService"
 
     private val main by lazy { Handler(Looper.getMainLooper()) }
 
@@ -592,7 +593,7 @@ internal object ShellServiceRemote {
     private var daemon = false
 
     /** A service this process hosts; [boundBy] the app process bound to it, null while kept unbound. */
-    private class Hosted(val service: ShellService) {
+    private class Hosted(val service: AxShellService) {
         var binder: IBinder? = null
         var intent: Intent? = null
         var boundBy: IBinder? = null
@@ -721,7 +722,7 @@ internal object ShellServiceRemote {
     private fun bindOnMain(className: String, intent: Intent): IBinder? {
         check(!exiting) { "the service process is exiting" }
         val entry = hosted[className] ?: run {
-            val service = Class.forName(className).getDeclaredConstructor().newInstance() as ShellService
+            val service = Class.forName(className).getDeclaredConstructor().newInstance() as AxShellService
             service.attach(packageContext)
             Hosted(service).also {
                 hosted[className] = it
@@ -745,7 +746,7 @@ internal object ShellServiceRemote {
         return entry.binder
     }
 
-    /** No connection left: [ShellService.onUnbind] decides whether it stays. */
+    /** No connection left: [AxShellService.onUnbind] decides whether it stays. */
     private fun unbind(className: String) {
         val entry = hosted[className] ?: return
         entry.boundBy = null
@@ -764,7 +765,7 @@ internal object ShellServiceRemote {
         return exiting
     }
 
-    fun stopSelf(service: ShellService) {
+    fun stopSelf(service: AxShellService) {
         main.post {
             val className = hosted.entries.firstOrNull { it.value.service === service }?.key ?: return@post
             destroy(className)
@@ -891,7 +892,7 @@ internal object ShellServiceRemote {
                     Log.getStackTraceString((e as? ExecutionException)?.cause ?: e)
                 }
                 error?.let { System.err.println("shellservice: onBind failed: $it") }
-                // The binder, then why there's none: the app shows it (ShellService.lastFailure).
+                // The binder, then why there's none: the app shows it (AxShellService.lastFailure).
                 reply?.writeNoException()
                 reply?.writeStrongBinder(result.getOrNull())
                 reply?.writeString(error ?: if (result.getOrNull() == null) "onBind returned null" else null)
@@ -945,3 +946,7 @@ internal object ShellServiceRemote {
         }
     }
 }
+
+/** The name up to 2.1.0; renamed so the public API all starts with Ax. */
+@Deprecated("Renamed to AxShellService", ReplaceWith("AxShellService", "frb.axeron.shell.AxShellService"))
+typealias ShellService = AxShellService

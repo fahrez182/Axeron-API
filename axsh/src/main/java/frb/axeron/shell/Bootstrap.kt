@@ -25,7 +25,7 @@ import kotlin.system.exitProcess
  * bootstrapDex in build.gradle.kts), or the whole base.apk for APKs without it, which starts
  * slower. Running as the caller's uid, this process asks the
  * manager for the server binder and serves that session over the fd, so the client sees the
- * same protocol as with an in-app [Broker].
+ * same protocol as with an in-app [AxBroker].
  *
  * When the user turned on [KeepAlive] in the manager, the app keeps a broker on
  * `@axsh.<uid>` so the next axsh runs skip app_process and the broadcast:
@@ -38,6 +38,7 @@ import kotlin.system.exitProcess
  * Either leaves after the idle time chosen in the manager, or once AxManager was updated, so the
  * next run starts a bootstrap with the new code.
  */
+@InternalAxeronApi
 object Bootstrap {
 
     private const val TAG = "AxshBootstrap"
@@ -77,7 +78,7 @@ object Bootstrap {
         val daemon = AtomicReference<Daemon?>(null)
         val listening = AtomicBoolean(false)
         val starter = AtomicReference<Thread?>(null)
-        Broker.serveOne(socket, ::broadcast) { minutes ->
+        AxBroker.serveOne(socket, ::broadcast) { minutes ->
             if (minutes == KeepAlive.OFF || keptMinutes[0] != KeepAlive.OFF) return@serveOne
             keptMinutes[0] = minutes
             // Not on this binder thread: the channel is a call to the server, which needs the
@@ -85,7 +86,7 @@ object Bootstrap {
             starter.set(thread(name = "axsh-daemon-start") {
                 val result = startDaemon(axsh, minutes)
                 daemon.set(result)
-                if (result == Daemon.UNSUPPORTED) listening.set(Broker.listen())
+                if (result == Daemon.UNSUPPORTED) listening.set(AxBroker.listen())
             })
         }
         starter.get()?.join()
@@ -96,7 +97,7 @@ object Bootstrap {
             // Asked before the user allowed this app in this very session: try once more.
             Daemon.NOT_PERMITTED -> when (startDaemon(axsh, keptMinutes[0])) {
                 Daemon.STARTED, Daemon.NOT_PERMITTED -> exitProcess(0)
-                Daemon.UNSUPPORTED -> if (!Broker.listen()) exitProcess(0)
+                Daemon.UNSUPPORTED -> if (!AxBroker.listen()) exitProcess(0)
             }
             Daemon.UNSUPPORTED -> if (!listening.get()) exitProcess(0) // the app has its own broker
         }
@@ -111,7 +112,7 @@ object Bootstrap {
     private fun startDaemon(axsh: String?, minutes: Int): Daemon {
         if (axsh == null || !File(axsh).canExecute()) return Daemon.UNSUPPORTED
         val channel = try {
-            Broker.openChannel()
+            AxBroker.openChannel()
         } catch (_: SecurityException) {
             return Daemon.NOT_PERMITTED
         } catch (e: Exception) {
@@ -167,11 +168,11 @@ object Bootstrap {
             if (apk != null && !File(apk).exists()) {
                 // AxManager was updated: let the next run start the new code, finish what runs.
                 Log.i(TAG, "$apk is gone, leaving")
-                Broker.stop()
-                while (Broker.activeSessions > 0) Thread.sleep(CHECK_MS)
+                AxBroker.stop()
+                while (AxBroker.activeSessions > 0) Thread.sleep(CHECK_MS)
                 exitProcess(0)
             }
-            if (Broker.activeSessions == 0 && Broker.idleMillis >= idleLimit) {
+            if (AxBroker.activeSessions == 0 && AxBroker.idleMillis >= idleLimit) {
                 Log.i(TAG, "idle for $minutes min, leaving")
                 exitProcess(0)
             }

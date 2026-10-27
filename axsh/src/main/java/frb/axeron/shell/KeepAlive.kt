@@ -13,6 +13,7 @@ package frb.axeron.shell
  * The uid in the request isn't checked, and needs no checking: the setting only shapes the
  * requester's own helper, in its own process; claiming another uid gains no access.
  */
+@InternalAxeronApi
 object KeepAlive {
 
     /** Not kept: one session, then the bootstrap exits. */

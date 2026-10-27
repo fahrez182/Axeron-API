@@ -7,8 +7,8 @@
     </queries>
 
     <application>
-        <!-- ShellService: its processes hand their binder in here (it checks their uid), and it
-             keeps the app's Context for ShellService.bind. -->
+        <!-- AxShellService: its processes hand their binder in here (it checks their uid), and it
+             keeps the app's Context for AxShellService.bind. -->
         <provider
             android:name="frb.axeron.shell.ShellServiceProvider"
             android:authorities="${applicationId}.shellservice"

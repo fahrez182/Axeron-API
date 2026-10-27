@@ -6,6 +6,7 @@ import android.system.ErrnoException
 import android.system.Os
 import android.system.OsConstants
 import android.util.Log
+import frb.axeron.shell.InternalAxeronApi
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -15,8 +16,8 @@ import java.nio.ByteOrder
  * PTY and the client's pipes; without one the pipes are the shell's stdio and nothing is copied.
  * Natives live in libaxsh_host.so ([loadLibrary]), registered on this class by name
  * (RegisterNatives in pty_host.cpp), so they stay static methods of `PtyHost` itself.
- * Started from rish's RishHost.
  */
+@InternalAxeronApi
 class PtyHost(
     // libcore/ojluni/src/main/java/java/lang/ProcessImpl.java
     private val args: Array<String>,

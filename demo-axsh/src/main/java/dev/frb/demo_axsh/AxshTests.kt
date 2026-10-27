@@ -4,7 +4,7 @@ import android.content.Intent
 import android.os.Handler
 import android.os.Looper
 import com.topjohnwu.superuser.ipc.RootService
-import frb.axeron.shell.ShellService
+import frb.axeron.shell.AxShellService
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
 
@@ -41,8 +41,8 @@ private const val SHELL = "Shell"
 private const val PRIVILEGES = "Privileges"
 private const val TEST_FUNCTION = "Test Function plugin"
 private const val ROOT_SERVICE = "libsu RootService"
-private const val SHELL_SERVICE = "ShellService"
-private const val SHELL_SERVICE_DAEMON = "ShellService daemon"
+private const val SHELL_SERVICE = "AxShellService"
+private const val SHELL_SERVICE_DAEMON = "AxShellService daemon"
 
 /** One line under each section's title. */
 val sectionInfo: Map<String, String> = mapOf(
@@ -254,14 +254,14 @@ private val mainTests: List<AxshTest> = listOf(
         }
     },
 
-    // ---- ShellService ----
+    // ---- AxShellService ----
     AxshTest(
         SHELL_SERVICE, "Bind",
         "Binds UserService1, shows its uid and SELinux context."
     ) {
         val connection = UserServiceConnection()
         val intent = Intent(Application.app, UserService1::class.java)
-        mainHandler.post { ShellService.bind(intent, connection) }
+        mainHandler.post { AxShellService.bind(intent, connection) }
         try {
             val service = connection.waitForService()
             val uid = service.uid
@@ -271,7 +271,7 @@ private val mainTests: List<AxshTest> = listOf(
         } catch (e: Exception) {
             fail(e.toString())
         } finally {
-            mainHandler.post { ShellService.unbind(connection) }
+            mainHandler.post { AxShellService.unbind(connection) }
         }
     },
     AxshTest(
@@ -280,7 +280,7 @@ private val mainTests: List<AxshTest> = listOf(
     ) {
         val connection = UserServiceConnection()
         val intent = Intent(Application.app, UserService1::class.java)
-        mainHandler.post { ShellService.bind(intent, connection) }
+        mainHandler.post { AxShellService.bind(intent, connection) }
         try {
             val service = connection.waitForService()
             val output = service.exec("id")
@@ -288,7 +288,7 @@ private val mainTests: List<AxshTest> = listOf(
         } catch (e: Exception) {
             fail(e.toString())
         } finally {
-            mainHandler.post { ShellService.unbind(connection) }
+            mainHandler.post { AxShellService.unbind(connection) }
         }
     },
     AxshTest(
@@ -299,8 +299,8 @@ private val mainTests: List<AxshTest> = listOf(
         val connection2 = UserServiceConnection()
         val intent1 = Intent(Application.app, UserService1::class.java)
         val intent2 = Intent(Application.app, UserService2::class.java)
-        mainHandler.post { ShellService.bind(intent1, connection1) }
-        mainHandler.post { ShellService.bind(intent2, connection2) }
+        mainHandler.post { AxShellService.bind(intent1, connection1) }
+        mainHandler.post { AxShellService.bind(intent2, connection2) }
         try {
             val service1 = connection1.waitForService()
             val service2 = connection2.waitForService()
@@ -315,8 +315,8 @@ private val mainTests: List<AxshTest> = listOf(
         } catch (e: Exception) {
             fail(e.toString())
         } finally {
-            mainHandler.post { ShellService.unbind(connection1) }
-            mainHandler.post { ShellService.unbind(connection2) }
+            mainHandler.post { AxShellService.unbind(connection1) }
+            mainHandler.post { AxShellService.unbind(connection2) }
         }
     },
     AxshTest(
@@ -327,8 +327,8 @@ private val mainTests: List<AxshTest> = listOf(
         val connection2 = UserServiceConnection()
         val intent1 = Intent(Application.app, UserService1::class.java)
         val intent2 = Intent(Application.app, UserService2::class.java)
-        mainHandler.post { ShellService.bind(intent1, connection1) }
-        mainHandler.post { ShellService.bind(intent2, connection2) }
+        mainHandler.post { AxShellService.bind(intent1, connection1) }
+        mainHandler.post { AxShellService.bind(intent2, connection2) }
         try {
             val service1 = connection1.waitForService()
             val service2 = connection2.waitForService()
@@ -341,8 +341,8 @@ private val mainTests: List<AxshTest> = listOf(
         } catch (e: Exception) {
             fail(e.toString())
         } finally {
-            mainHandler.post { ShellService.unbind(connection1) }
-            mainHandler.post { ShellService.unbind(connection2) }
+            mainHandler.post { AxShellService.unbind(connection1) }
+            mainHandler.post { AxShellService.unbind(connection2) }
         }
     },
     AxshTest(
@@ -351,7 +351,7 @@ private val mainTests: List<AxshTest> = listOf(
     ) {
         val connection = UserServiceConnection()
         val intent = Intent(Application.app, UserService1::class.java)
-        mainHandler.post { ShellService.bind(intent, connection) }
+        mainHandler.post { AxShellService.bind(intent, connection) }
         try {
             val service = connection.waitForService()
             val opPackage = service.opPackageName
@@ -360,7 +360,7 @@ private val mainTests: List<AxshTest> = listOf(
         } catch (e: Exception) {
             fail(e.toString())
         } finally {
-            mainHandler.post { ShellService.unbind(connection) }
+            mainHandler.post { AxShellService.unbind(connection) }
         }
     },
     AxshTest(
@@ -369,7 +369,7 @@ private val mainTests: List<AxshTest> = listOf(
     ) {
         val connection = UserServiceConnection()
         val intent = Intent(Application.app, UserService1::class.java)
-        mainHandler.post { ShellService.bind(intent, connection) }
+        mainHandler.post { AxShellService.bind(intent, connection) }
         try {
             val service = connection.waitForService()
             // A Kotlin null here (not the string "null"): the service's process doesn't know
@@ -385,7 +385,7 @@ private val mainTests: List<AxshTest> = listOf(
         } catch (e: Exception) {
             fail(e.toString())
         } finally {
-            mainHandler.post { ShellService.unbind(connection) }
+            mainHandler.post { AxShellService.unbind(connection) }
         }
     },
 )
@@ -398,29 +398,29 @@ private val daemonTests: List<AxshTest> = listOf(
         "Pid before and after an unbind."
     ) {
         val intent = Intent(Application.app, DaemonService::class.java)
-        intent.addCategory(ShellService.CATEGORY_DAEMON_MODE)
+        intent.addCategory(AxShellService.CATEGORY_DAEMON_MODE)
 
         val connection1 = UserServiceConnection()
-        mainHandler.post { ShellService.bind(intent, connection1) }
+        mainHandler.post { AxShellService.bind(intent, connection1) }
         val firstPid: Int
         try {
             firstPid = connection1.waitForService().pid
         } catch (e: Exception) {
             return@AxshTest fail("first bind: $e")
         }
-        mainHandler.post { ShellService.unbind(connection1) }
+        mainHandler.post { AxShellService.unbind(connection1) }
 
         Thread.sleep(2000)
 
         val connection2 = UserServiceConnection()
-        mainHandler.post { ShellService.bind(intent, connection2) }
+        mainHandler.post { AxShellService.bind(intent, connection2) }
         try {
             val secondPid = connection2.waitForService().pid
             pass("pid $firstPid, then pid $secondPid", "first bind: pid $firstPid\nsecond bind: pid $secondPid")
         } catch (e: Exception) {
             fail("second bind: $e", "first bind: pid $firstPid")
         } finally {
-            mainHandler.post { ShellService.unbind(connection2) }
+            mainHandler.post { AxShellService.unbind(connection2) }
         }
     },
     AxshTest(
@@ -428,9 +428,9 @@ private val daemonTests: List<AxshTest> = listOf(
         "Shows the pid. Run, close the app from Recents, reopen, run again."
     ) {
         val intent = Intent(Application.app, DaemonService::class.java)
-        intent.addCategory(ShellService.CATEGORY_DAEMON_MODE)
+        intent.addCategory(AxShellService.CATEGORY_DAEMON_MODE)
         val connection = UserServiceConnection()
-        mainHandler.post { ShellService.bind(intent, connection) }
+        mainHandler.post { AxShellService.bind(intent, connection) }
         try {
             val service = connection.waitForService()
             val pid = service.pid
@@ -439,7 +439,7 @@ private val daemonTests: List<AxshTest> = listOf(
         } catch (e: Exception) {
             fail(e.toString())
         } finally {
-            mainHandler.post { ShellService.unbind(connection) }
+            mainHandler.post { AxShellService.unbind(connection) }
         }
     },
     AxshTest(
@@ -447,20 +447,20 @@ private val daemonTests: List<AxshTest> = listOf(
         "stop(), then bind again: shows the new pid."
     ) {
         val intent = Intent(Application.app, DaemonService::class.java)
-        intent.addCategory(ShellService.CATEGORY_DAEMON_MODE)
-        mainHandler.post { ShellService.stop(intent) }
+        intent.addCategory(AxShellService.CATEGORY_DAEMON_MODE)
+        mainHandler.post { AxShellService.stop(intent) }
 
         Thread.sleep(2000)
 
         val connection = UserServiceConnection()
-        mainHandler.post { ShellService.bind(intent, connection) }
+        mainHandler.post { AxShellService.bind(intent, connection) }
         try {
             val pid = connection.waitForService().pid
             pass("pid after stop: $pid", "pid after stop: $pid")
         } catch (e: Exception) {
             fail(e.toString())
         } finally {
-            mainHandler.post { ShellService.unbind(connection) }
+            mainHandler.post { AxShellService.unbind(connection) }
         }
     },
 )

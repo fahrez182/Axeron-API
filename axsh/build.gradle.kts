@@ -34,9 +34,14 @@ android {
 
 dependencies {
     implementation(libs.libcxx)
-    // Broker starts the remote shell through IAxeronService.
+    // AxBroker starts the remote shell through IAxeronService.
     implementation(project(":aidl"))
-    implementation(project(":shared"))
+    // compileOnly: axsh takes only compile-time constants from shared (const val / static final),
+    // which are copied into its own bytecode, so apps never need shared at runtime and it isn't
+    // published. Anything else from it (a @JvmField val, PathHelper, …) would crash apps with
+    // NoClassDefFoundError while AxManager itself, which has shared, kept working: demo-axsh
+    // is what would show it.
+    compileOnly(project(":shared"))
     // Bootstrap sends the binder request from app_process, where there is no Context.
     implementation(libs.rikka.hidden.compat)
     // Its full broadcastIntent overload names hidden framework types (IIntentReceiver).

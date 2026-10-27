@@ -1,10 +1,12 @@
 package dev.frb.demo_axsh
 
+import android.app.Application
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.util.Log
 import com.topjohnwu.superuser.Shell
+import frb.axeron.shell.AxBroker
 import frb.axeron.shell.Broker
 import java.io.File
 import kotlin.system.exitProcess
@@ -12,7 +14,7 @@ import kotlin.system.exitProcess
 /**
  * Two ways an app can run axsh, picked by [directConnection] (prefs key `axsh_direct_connection`):
  *
- * - **true**: the axsh dependency. Our own libaxsh.so, served by [Broker] listening in this
+ * - **true**: the axsh dependency. Our own libaxsh.so, served by [AxBroker] listening in this
  *   process: the binder is fetched once and every shell after that is a socket connect away.
  * - **false**: no broker. The manager's libaxsh.so, as Termux runs it: each shell starts a
  *   bootstrap in app_process that asks the manager for the binder, then exits.
@@ -20,7 +22,7 @@ import kotlin.system.exitProcess
  * Read once at start: a listening broker can't reliably be torn down (close doesn't always wake
  * accept), so changing it restarts the app.
  */
-class Application : android.app.Application() {
+class App : Application() {
 
     override fun onCreate() {
         super.onCreate()
@@ -54,7 +56,7 @@ class Application : android.app.Application() {
         private const val KEY_DIRECT_CONNECTION = "axsh_direct_connection"
         const val DEFAULT_DIRECT_CONNECTION = true
 
-        lateinit var app: Application
+        lateinit var app: App
             private set
 
         /** The mode this process started in. */

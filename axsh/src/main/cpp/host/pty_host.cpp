@@ -75,7 +75,7 @@ static void initVectorFromBlock(const char **vector, const char *block, int coun
     vector[count] = nullptr;
 }
 
-static jintArray RishHost_startHost(
+static jintArray PtyHost_start(
         JNIEnv *env, jclass clazz,
         jbyteArray argBlock, jint argc,
         jbyteArray envBlock, jint envc,
@@ -90,7 +90,7 @@ static jintArray RishHost_startHost(
     // here, and once we drop our copies the client sees EOF when the shell is done (and vice versa).
     bool direct = tty == 0;
 
-    LOGD("[START] RishHost_startHost");
+    LOGD("[START] PtyHost_start");
     LOGD("[MODE ] tty=0x%02x in_tty=%d out_tty=%d err_tty=%d",
          tty, in_tty ? 1 : 0, out_tty ? 1 : 0, err_tty ? 1 : 0);
 
@@ -337,11 +337,11 @@ static jintArray RishHost_startHost(
 }
 
 
-static void RishHost_setWindowSize(JNIEnv *env, jclass clazz, jint ptmx, jlong size) {
+static void PtyHost_setWindowSize(JNIEnv *env, jclass clazz, jint ptmx, jlong size) {
     setWindowSize(ptmx, size);
 }
 
-static jint RishHost_waitFor(JNIEnv *env, jclass clazz, jint pid) {
+static jint PtyHost_waitFor(JNIEnv *env, jclass clazz, jint pid) {
     if (pid < 0)
         return -1;
 
@@ -377,9 +377,9 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
     auto clazz = env->FindClass("frb/axeron/shell/host/PtyHost");
     if (clazz == nullptr) return JNI_ERR;
     JNINativeMethod methods[] = {
-            {"start",         "([BI[BI[BBIII)[I", (void *) RishHost_startHost},
-            {"setWindowSize", "(IJ)V",            (void *) RishHost_setWindowSize},
-            {"waitFor",       "(I)I",             (void *) RishHost_waitFor},
+            {"start",         "([BI[BI[BBIII)[I", (void *) PtyHost_start},
+            {"setWindowSize", "(IJ)V",            (void *) PtyHost_setWindowSize},
+            {"waitFor",       "(I)I",             (void *) PtyHost_waitFor},
     };
     if (env->RegisterNatives(clazz, methods, sizeof(methods) / sizeof(methods[0])) != JNI_OK) {
         return JNI_ERR;

@@ -7,7 +7,7 @@ import android.content.ServiceConnection
 import android.os.IBinder
 import android.system.Os
 import com.topjohnwu.superuser.ipc.RootService
-import frb.axeron.shell.ShellService
+import frb.axeron.shell.AxShellService
 import java.io.File
 
 // A static. Services in the same process see the same value.
@@ -20,7 +20,7 @@ object SharedCounter {
 //    or uid 0 (root mode).
 // ============================================================================================
 
-class UserService1 : ShellService() {
+class UserService1 : AxShellService() {
 
     override fun onBind(intent: Intent): IBinder {
         return object : IUserService.Stub() {
@@ -66,7 +66,7 @@ class UserService1 : ShellService() {
 }
 
 // A second service, the very same code. It runs in the same process as UserService1.
-class UserService2 : ShellService() {
+class UserService2 : AxShellService() {
 
     override fun onBind(intent: Intent): IBinder {
         return object : IUserService.Stub() {
@@ -111,10 +111,10 @@ class UserService2 : ShellService() {
     }
 }
 
-// A daemon. Bound with an intent that has ShellService.CATEGORY_DAEMON_MODE, it runs in the
+// A daemon. Bound with an intent that has AxShellService.CATEGORY_DAEMON_MODE, it runs in the
 // daemon process, which keeps running after this app is closed. onUnbind returns true, so the
 // service stays there too, and the next bind reaches it again and calls onRebind.
-class DaemonService : ShellService() {
+class DaemonService : AxShellService() {
 
     override fun onUnbind(intent: Intent): Boolean {
         return true
@@ -235,11 +235,11 @@ class UserServiceConnection : ServiceConnection {
     }
 
     override fun onBindingDied(name: ComponentName) {
-        error = "binding died: " + ShellService.lastFailure(name)
+        error = "binding died: " + AxShellService.lastFailure(name)
     }
 
     override fun onNullBinding(name: ComponentName) {
-        error = "null binding: " + ShellService.lastFailure(name)
+        error = "null binding: " + AxShellService.lastFailure(name)
     }
 
     /** For the tests only, which run off the main thread: waits until connected (or 20 s). */

@@ -1,5 +1,5 @@
 // Wire protocol between the native `axsh` client and whoever serves it: the server's own socket
-// (@axeron, AxshServer), an app's Broker (@axsh.<uid>), or Bootstrap over a socketpair.
+// (@axeron, AxshServer), an app's AxBroker (@axsh.<uid>), or Bootstrap over a socketpair.
 // All three run the same code, frb.axeron.shell.Sessions.
 //
 // The client always brings its own pipes, and the shell is started on them
@@ -42,7 +42,7 @@ namespace axsh {
 // in discovery. The server owns the listener.
 inline constexpr char SOCKET_NAME[] = "axeron";
 
-// Broker socket: BROKER_PREFIX + decimal uid, also abstract. Must match Broker.socketName().
+// AxBroker socket: BROKER_PREFIX + decimal uid, also abstract. Must match AxBroker.socketName().
 inline constexpr char BROKER_PREFIX[] = "axsh.";
 
 // Without a broker, the client runs this class from its own APK in app_process and talks the

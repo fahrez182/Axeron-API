@@ -13,7 +13,7 @@ import java.util.concurrent.CountDownLatch
 import kotlin.concurrent.thread
 
 /**
- * axsh for an app that has the axsh module and runs [Broker]: a shell on AxManager's server
+ * axsh for an app that has the axsh module and runs [AxBroker]: a shell on AxManager's server
  * as a [java.lang.Process], started in this process. Nothing is exec'd, so `libaxsh.so` needn't be
  * extracted (no `useLegacyPackaging`), and there is no socket or handshake: one binder call.
  *
@@ -36,7 +36,7 @@ object Axsh {
      * server, on pipes this process keeps: stdin, stdout and stderr apart, the shell's exit code.
      *
      * Blocks: call it off the main thread. With AxManager's permission on Ask, it waits on the
-     * dialog (up to 15 s). [Broker.start] must have run, as it holds or fetches the binder.
+     * dialog (up to 15 s). [AxBroker.start] must have run, as it holds or fetches the binder.
      *
      * @throws SecurityException when this app isn't allowed in AxManager
      * @throws IOException when the server is out of reach or the shell can't start
@@ -89,7 +89,7 @@ object Axsh {
         cols: Int,
         terminalEnv: Map<String, String>,
     ): Terminal {
-        val service = Broker.service() ?: throw IOException("AxManager server is not reachable")
+        val service = AxBroker.service() ?: throw IOException("AxManager server is not reachable")
 
         // [0] read end, [1] write end. The server gets stdin's read end and the others' write
         // ends. A PTY merges stderr into stdout, so it has no pipe of its own then.
@@ -116,7 +116,7 @@ object Axsh {
             try {
                 launch()
             } catch (_: SecurityException) {
-                if (!Broker.awaitPermission(service)) throw SecurityException(Sessions.DENIED_MESSAGE)
+                if (!AxBroker.awaitPermission(service)) throw SecurityException(Sessions.DENIED_MESSAGE)
                 launch()
             }
         } catch (e: Throwable) {

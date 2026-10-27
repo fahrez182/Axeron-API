@@ -8,7 +8,7 @@ namespace axsh {
 // Connects to the AxManager server. Returns a connected fd, or -1 on failure.
 int connect_server();
 
-// Connects to this app's own Broker (@axsh.<uid>) and checks it runs as our uid.
+// Connects to this app's own AxBroker (@axsh.<uid>) and checks it runs as our uid.
 // Returns a connected fd, or -1 on failure.
 int connect_broker();
 
