@@ -18,6 +18,14 @@ object AxeronApiConstant {
         const val TYPE_NEW_ENV = 1
 
         /**
+         * In the bindApplication reply: the uid that attached the application. A binder that
+         * isn't the server's can pass a client's application on to the real server, which then
+         * calls back from root or shell for it; this names who really attached, so the client can
+         * tell. Absent from servers before it.
+         */
+        const val BIND_APPLICATION_CLIENT_UID = "axeron:bind-application-client-uid"
+
+        /**
          * Path lists of the default env (TYPE_DEFAULT_ENV) that the user's env may only add to:
          * its value keeps `$NAME` for the default, which is put in front when it is missing.
          * Every other default variable is the server's or the system's, and the user's env

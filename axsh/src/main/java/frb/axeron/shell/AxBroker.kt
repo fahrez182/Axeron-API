@@ -13,6 +13,7 @@ import android.os.Process
 import android.os.SystemClock
 import android.util.Log
 import frb.axeron.server.IAxeronService
+import frb.axeron.shared.AxeronApiConstant
 import frb.axeron.shared.ShizukuApiConstant
 import moe.shizuku.server.IShizukuApplication
 import rikka.hidden.compat.PackageManagerApis
@@ -239,8 +240,13 @@ object AxBroker : Sessions.Host {
      */
     private val application = object : IShizukuApplication.Stub() {
         override fun bindApplication(data: Bundle?) {
-            val fromServer = callerIsServer()
-            if (!fromServer) Log.w(tag, "bindApplication from uid ${Binder.getCallingUid()}, not the server")
+            // Called back from root or shell, and for an attach we made: a binder relaying ours to
+            // the real server would be named here as the uid that attached.
+            val clientUid = data?.getInt(AxeronApiConstant.server.BIND_APPLICATION_CLIENT_UID, -1) ?: -1
+            val fromServer = callerIsServer() && (clientUid == -1 || clientUid == Process.myUid())
+            if (!fromServer) {
+                Log.w(tag, "bindApplication from uid ${Binder.getCallingUid()} for uid $clientUid, not the server's for us")
+            }
             handshake?.let {
                 it.fromServer = fromServer
                 it.latch.countDown()

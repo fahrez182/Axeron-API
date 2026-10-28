@@ -89,6 +89,14 @@ object Axeron {
                 onBinderReceived(null, null)
                 return
             }
+            // From root or shell, but maybe for someone else's attach: a binder that isn't the
+            // server's can pass ours on to the real one. The server names who attached.
+            val clientUid = data.getInt(AxeronApiConstant.server.BIND_APPLICATION_CLIENT_UID, -1)
+            if (clientUid != -1 && clientUid != Process.myUid()) {
+                Log.w(TAG, "bindApplication for uid $clientUid, attached by someone else: dropping its binder")
+                onBinderReceived(null, null)
+                return
+            }
             serverVerified = true
 
             permissionGranted = data.getBoolean(BIND_APPLICATION_PERMISSION_GRANTED, false)
