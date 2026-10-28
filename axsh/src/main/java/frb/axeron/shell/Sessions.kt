@@ -46,6 +46,9 @@ class Sessions(private val host: Host) {
         /** The server to start shells on; null when it is out of reach. */
         fun service(): IAxeronService?
 
+        /** Why [service] last came back null, appended to the client's error; null for none. */
+        fun unavailableReason(): String? = null
+
         /**
          * The server refused the shell ([SecurityException]). Ask the user for permission if this
          * host can, and block until they answer: true when granted, so the shell is tried again
@@ -229,7 +232,12 @@ class Sessions(private val host: Host) {
 
             val axeron = host.service()
             if (axeron == null) {
-                writeStatus(output, STATUS_ERROR, "AxManager server is not running")
+                val why = host.unavailableReason()
+                writeStatus(
+                    output, STATUS_ERROR,
+                    if (why == null) "AxManager server is not running"
+                    else "AxManager server is not running [$why]"
+                )
                 return
             }
 

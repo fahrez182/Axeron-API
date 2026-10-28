@@ -2,6 +2,7 @@ package frb.axeron.shell
 
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.net.LocalSocket
 import android.os.Binder
 import android.os.Bundle
@@ -25,16 +26,21 @@ import java.util.concurrent.TimeUnit
  * (`shell` in ADB mode). This broker listens on `@axsh.<uid>` and serves [Sessions] there,
  * reaching the server over binder, which checks it against this app's uid.
  *
- * The binder comes from the host when it holds one (the manager), otherwise from the manager the
- * same way axerish got it: an `AxRuntime.REQUEST_BINDER` broadcast answered by
- * the manager's `ShellBinderRequestHandler`.
+ * The binder comes from the host when it holds one (the manager), otherwise it is pulled from the
+ * server's `AxRuntime.SERVER_BINDER` sticky broadcast (an app with a Context), or, failing that
+ * and for an app_process client that can't read a sticky ([Bootstrap]), asked of the manager with
+ * an `AxRuntime.REQUEST_BINDER` broadcast.
  */
 object AxBroker : Sessions.Host {
 
     @InternalAxeronApi
     override val tag = "AxshBroker"
 
-    // Mirrors ServerConstants.REQUEST_BINDER_AXRUNTIME and the manager's package.
+    // Mirrors AxeronService.SERVER_BINDER_ACTION: the server's sticky binder, read in-app.
+    private const val ACTION_SERVER_BINDER = "AxRuntime.SERVER_BINDER"
+
+    // Mirrors ServerConstants.REQUEST_BINDER_AXRUNTIME and the manager's package: the fallback
+    // relay for an app_process client, which can't read a sticky.
     private const val ACTION_REQUEST_BINDER = "AxRuntime.REQUEST_BINDER"
     private const val MANAGER_PACKAGE = "frb.axeron.manager"
     private const val BINDER_TIMEOUT_MS = 5_000L
@@ -46,6 +52,10 @@ object AxBroker : Sessions.Host {
     /** How the binder request reaches the manager: Context in an app, ActivityManager in app_process. */
     @Volatile
     private var sendRequest: ((Intent) -> Unit)? = null
+
+    /** Where an app reads the server's sticky binder from; null in app_process. */
+    @Volatile
+    private var stickyContext: Context? = null
 
     /** Set when the host already holds the server binder; then nothing is asked of the manager. */
     @Volatile
@@ -60,9 +70,7 @@ object AxBroker : Sessions.Host {
 
     /**
      * @param binder where the host keeps the server binder, if it has one (the manager does);
-     *   null to ask the manager for it with an `AxRuntime.REQUEST_BINDER` broadcast. The manager
-     *   must not use the broadcast: its own receiver would wait behind a main thread that may be
-     *   blocked on the very shell being started.
+     *   null to read it from the server's `AxRuntime.SERVER_BINDER` sticky broadcast.
      */
     @JvmStatic
     @JvmOverloads
@@ -74,6 +82,7 @@ object AxBroker : Sessions.Host {
             // registered yet); the Application itself is the context to keep then.
             val appContext = context.applicationContext ?: context
             sendRequest = { appContext.sendBroadcast(it) }
+            stickyContext = appContext
             packageName = context.packageName
             binderSource = binder
             sessions.listen(socketName())
@@ -120,10 +129,18 @@ object AxBroker : Sessions.Host {
     override fun refuse(uid: Int, pid: Int): String? =
         if (uid == Process.myUid()) null else "Not this app's process"
 
+    /** Why the last [service] came back null, shown to the client in place of a bare error. */
+    @Volatile
+    private var unavailable: String? = null
+
+    @InternalAxeronApi
+    override fun unavailableReason(): String? = unavailable
+
     @InternalAxeronApi
     override fun service(): IAxeronService? {
         binderSource?.let { source ->
             return source()?.takeIf { it.pingBinder() }?.let { IAxeronService.Stub.asInterface(it) }
+                ?: null.also { unavailable = "the host's server binder is dead" }
         }
         service?.takeIf { it.asBinder().pingBinder() }?.let { return it }
         synchronized(this) {
@@ -227,8 +244,51 @@ object AxBroker : Sessions.Host {
 
     // ---- binder ----
 
-    /** Asks the manager for the server binder; the reply arrives as transaction 1 on [receiver]. */
+    /**
+     * The server binder, pulled from its sticky when this is an app with a Context, else asked of
+     * the manager. An app_process client (no Context, no app process in AMS) can only use the
+     * manager; an in-app client prefers the sticky and falls back to the manager when the sticky
+     * is missing (a server too old to publish one).
+     */
     private fun requestBinder(): IBinder? {
+        stickyContext?.let { context ->
+            readStickyBinder(context)?.let {
+                unavailable = null
+                return it
+            }
+        }
+        return requestBinderFromManager()
+    }
+
+    /**
+     * Reads the server's binder from its sticky broadcast (AxeronService.publishBinder):
+     * registerReceiver with a null receiver just returns the sticky intent system_server holds,
+     * so nothing is delivered, nobody is woken and there is nothing to wait for. Needs a real app
+     * process, so only [start]'s Context path; a stale sticky holds a dead binder, dropped here.
+     */
+    private fun readStickyBinder(context: Context): IBinder? {
+        val sticky = try {
+            context.registerReceiver(null, IntentFilter(ACTION_SERVER_BINDER))
+        } catch (e: Exception) {
+            unavailable = "can't read the server's sticky binder: ${e.message ?: e}"
+            Log.w(tag, "sticky read failed", e)
+            return null
+        }
+        val binder = sticky?.getBundleExtra("data")?.getBinder("binder")
+        if (binder == null) {
+            unavailable = "the server left no binder (not running)"
+            return null
+        }
+        if (!binder.pingBinder()) {
+            unavailable = "the server's binder is dead (server stopped)"
+            return null
+        }
+        Log.i(tag, "binder from the server's sticky")
+        return binder
+    }
+
+    /** Asks the manager for the server binder; the reply arrives as transaction 1 on [receiver]. */
+    private fun requestBinderFromManager(): IBinder? {
         val start = SystemClock.uptimeMillis()
         val latch = CountDownLatch(1)
         var received: IBinder? = null
@@ -262,22 +322,29 @@ object AxBroker : Sessions.Host {
                 putInt(KeepAlive.EXTRA_UID, Process.myUid())
             })
         try {
-            val sender = sendRequest ?: return null
+            val sender = sendRequest ?: run {
+                unavailable = "no way to reach the server (no broker started)"
+                return null
+            }
             sender(intent)
         } catch (e: Exception) {
+            unavailable = "binder request to the manager failed: ${e.message ?: e}"
             Log.w(tag, "binder request failed", e)
             return null
         }
 
         if (!latch.await(BINDER_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+            unavailable = "the manager didn't answer (is AxManager running?)"
             Log.w(tag, "no binder from $MANAGER_PACKAGE")
             return null
         }
         val binder = received
         if (binder == null || !binder.pingBinder()) {
+            unavailable = "the manager replied without a live binder"
             Log.w(tag, "manager replied without a live binder")
             return null
         }
+        unavailable = null
         Log.i(tag, "binder from $MANAGER_PACKAGE in ${SystemClock.uptimeMillis() - start} ms")
         return binder
     }
