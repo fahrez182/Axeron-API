@@ -8,10 +8,66 @@
 #include <pthread.h>
 #include <sys/resource.h>
 #include <sys/syscall.h>
+#include <dirent.h>
+#include <ctime>
+#include <climits>
+#include <cstring>
+#include <paths.h>
 #include "logging.h"
 #include "pts.h"
 
-extern char **environ;
+/**
+ * execvp for a child that shares the server's memory (vfork): it searches the PATH of [envp]
+ * itself, because making [envp] our environ first (what execvp would search) would change the
+ * server's own. A bare command still follows the PATH order it was given (preferSystemBinaries).
+ * No allocation. Returns only on failure, with errno as execvp leaves it.
+ */
+static void exec_with_path(const char *file, char *const argv[], char *const envp[]) {
+    if (strchr(file, '/') != nullptr) {
+        execve(file, argv, envp);
+        return;
+    }
+    const char *path = _PATH_DEFPATH;
+    for (char *const *e = envp; e != nullptr && *e != nullptr; ++e) {
+        if (strncmp(*e, "PATH=", 5) == 0) {
+            path = *e + 5;
+            break;
+        }
+    }
+    const size_t file_len = strlen(file);
+    bool denied = false;
+    char candidate[PATH_MAX];
+    for (const char *dir = path;;) {
+        const char *end = strchr(dir, ':');
+        const size_t dir_len = end != nullptr ? static_cast<size_t>(end - dir) : strlen(dir);
+        if (dir_len + 1 + file_len + 1 <= sizeof(candidate)) {
+            size_t length = 0;
+            if (dir_len > 0) {
+                memcpy(candidate, dir, dir_len);
+                length = dir_len;
+                candidate[length++] = '/';
+            }
+            memcpy(candidate + length, file, file_len + 1);
+            execve(candidate, argv, envp);
+            if (errno == ENOEXEC) {
+                // A script with no #! line: the shell runs it, as execvp does.
+                const char *sh_argv[64];
+                int argc = 0;
+                while (argv[argc] != nullptr) ++argc;
+                if (argc < 62) {
+                    sh_argv[0] = "sh";
+                    sh_argv[1] = candidate;
+                    for (int i = 1; i <= argc; ++i) sh_argv[i + 1] = argv[i];
+                    execve("/system/bin/sh", const_cast<char *const *>(sh_argv), envp);
+                }
+            }
+            if (errno == EACCES) denied = true;
+        }
+        if (end == nullptr) break;
+        dir = end + 1;
+    }
+    errno = denied ? EACCES : ENOENT;
+}
 
 /**
  * In the child, just before exec: the shell keeps stdin, stdout and stderr and nothing else of
@@ -19,14 +75,55 @@ extern char **environ;
  * shell still running: its @axeron listener (a restarted server can't bind it), its pipes, other
  * sessions' PTY masters. Raw syscalls: fdsan would abort on close() of an fd a Java object owns.
  */
-static void close_inherited_fds() {
+static void close_inherited_fds(const int *open_fds, int open_count) {
 #ifdef __NR_close_range
     if (syscall(__NR_close_range, 3u, ~0u, 0u) == 0) return;
 #endif
+    // Kernels before 5.9: only the fds that are open (listed before the fork, where reading
+    // /proc is safe), not every number up to the limit.
+    if (open_count >= 0) {
+        for (int i = 0; i < open_count; ++i) syscall(__NR_close, open_fds[i]);
+        return;
+    }
     rlimit limit{};
     const int max = getrlimit(RLIMIT_NOFILE, &limit) == 0 && limit.rlim_cur != RLIM_INFINITY
                     ? static_cast<int>(limit.rlim_cur) : 4096;
     for (int fd = 3; fd < max; ++fd) syscall(__NR_close, fd);
+}
+
+/** LOGD for the child, which under vfork shares the logger's state with the server. */
+#define CLOG(...) do { if (!quiet) LOGD(__VA_ARGS__); } while (0)
+
+/** Whether close_range exists here: probed once with a range that holds no fd. */
+static bool has_close_range() {
+#ifdef __NR_close_range
+    static const bool supported = syscall(__NR_close_range, ~0u, ~0u, 0u) == 0;
+    return supported;
+#else
+    return false;
+#endif
+}
+
+/**
+ * The open fds from 3 up, for a child that can't list them itself (no allocation after fork).
+ * -1 when /proc can't be read or there are more than [cap]: the child then closes every number.
+ */
+static int list_open_fds(int *out, int cap) {
+    DIR *dir = opendir("/proc/self/fd");
+    if (dir == nullptr) return -1;
+    const int self = dirfd(dir);
+    int count = 0;
+    while (dirent *entry = readdir(dir)) {
+        const int fd = atoi(entry->d_name);
+        if (fd < 3 || fd == self) continue;
+        if (count == cap) {
+            closedir(dir);
+            return -1;
+        }
+        out[count++] = fd;
+    }
+    closedir(dir);
+    return count;
 }
 
 static int setWindowSize(int ptmx, jlong size) {
@@ -156,7 +253,26 @@ static jintArray PtyHost_start(
         LOGD("[CWD  ] requested dir=%s", pdir); // [LOG+]
     }
 
-    auto pid = fork();
+    // As late as possible: an fd another thread opens after this isn't in the list.
+    int open_fds[1024];
+    const int open_count = has_close_range() ? -1 : list_open_fds(open_fds, 1024);
+
+    // Without a PTY the child only rearranges fds and execs, so it borrows our memory (vfork)
+    // instead of getting a copy of this process's page tables, which is most of what a fork of
+    // the server costs on a slow device. It must never return from here, write to a global or
+    // log: [quiet] keeps CLOG silent in it. The caller waits until the child execs, so a
+    // requested directory (a chdir that could hang on a stuck mount) keeps the plain fork.
+    const bool use_vfork = direct && pdir == nullptr;
+    const bool quiet = use_vfork;
+    timespec forkStart{}, forkEnd{};
+    clock_gettime(CLOCK_MONOTONIC, &forkStart);
+    auto pid = use_vfork ? vfork() : fork();
+    if (pid > 0) {
+        clock_gettime(CLOCK_MONOTONIC, &forkEnd);
+        LOGW("[FORK ] %s took %lld us (pid=%d)", use_vfork ? "vfork+exec" : "fork",
+             (long long) ((forkEnd.tv_sec - forkStart.tv_sec) * 1000000LL +
+                          (forkEnd.tv_nsec - forkStart.tv_nsec) / 1000), pid);
+    }
     if (pid == -1) {
         releaseBytes(env, argBlock, pargBlock);
         releaseBytes(env, envBlock, penvBlock);
@@ -232,20 +348,20 @@ static jintArray PtyHost_start(
         /* =========================
      * CHILD
      * ========================= */
-        LOGD("[CHILD ] pid=%d starting", getpid()); // [LOG+]
+        CLOG("[CHILD ] pid=%d starting", getpid()); // [LOG+]
 
         if (setsid() < 0) {
             PLOGE("[CHILD ] setsid failed");
-            exit(1);
+            _exit(1);
         }
 
         if (pdir) {
-            LOGD("[CHILD ] chdir attempt: %s", pdir);
+            CLOG("[CHILD ] chdir attempt: %s", pdir);
             if (access(pdir, X_OK) == 0) {
                 if (chdir(pdir) == -1) {
                     PLOGE("[CHILD ] chdir failed");
                 } else {
-                    LOGD("[CHILD ] chdir ok");
+                    CLOG("[CHILD ] chdir ok");
                 }
             } else {
                 PLOGE("[CHILD ] access denied");
@@ -257,15 +373,15 @@ static jintArray PtyHost_start(
             char pts_slave[PATH_MAX]{0};
             if (ptsname_r(ptmx, pts_slave, PATH_MAX - 1) == -1) {
                 PLOGE("[CHILD ] ptsname_r failed");
-                exit(1);
+                _exit(1);
             }
 
             if ((pts = open(pts_slave, O_RDWR)) == -1) {
                 PLOGE("[CHILD ] open pts failed");
             }
-            LOGD("[CHILD ] pts=%d (%s)", pts, pts_slave);
+            CLOG("[CHILD ] pts=%d (%s)", pts, pts_slave);
         } else {
-            LOGD("[CHILD ] no PTY, pipe mode");
+            CLOG("[CHILD ] no PTY, pipe mode");
         }
 
         if (direct) {
@@ -276,39 +392,39 @@ static jintArray PtyHost_start(
             for (int fd : client_fds) {
                 if (fd > STDERR_FILENO) close(fd);
             }
-            LOGD("[CHILD ] stdio <- client pipes");
+            CLOG("[CHILD ] stdio <- client pipes");
         } else if (in_tty) {
             dup2(pts, STDIN_FILENO);
-            LOGD("[CHILD ] stdin <- pts");
+            CLOG("[CHILD ] stdin <- pts");
         } else {
             dup2(stdin_pipe[0], STDIN_FILENO);
             close(stdin_pipe[1]);
-            LOGD("[CHILD ] stdin <- pipe");
+            CLOG("[CHILD ] stdin <- pipe");
         }
 
         if (direct) {
             // stdout and stderr were set above.
         } else if (out_tty) {
             dup2(pts, STDOUT_FILENO);
-            LOGD("[CHILD ] stdout <- pts");
+            CLOG("[CHILD ] stdout <- pts");
         } else {
             dup2(stdout_pipe[1], STDOUT_FILENO);
             close(stdout_pipe[0]);
-            LOGD("[CHILD ] stdout <- pipe");
+            CLOG("[CHILD ] stdout <- pipe");
         }
 
         if (direct) {
             // As above.
         } else if (err_tty) {
             dup2(pts, STDERR_FILENO);
-            LOGD("[CHILD ] stderr <- pts");
+            CLOG("[CHILD ] stderr <- pts");
         } else {
             dup2(stderr_pipe[1], STDERR_FILENO);
             close(stderr_pipe[0]);
-            LOGD("[CHILD ] stderr <- pipe");
+            CLOG("[CHILD ] stderr <- pipe");
         }
 
-        LOGD("[CHILD ] isatty stdin=%d stdout=%d stderr=%d",
+        CLOG("[CHILD ] isatty stdin=%d stdout=%d stderr=%d",
              isatty(STDIN_FILENO),
              isatty(STDOUT_FILENO),
              isatty(STDERR_FILENO));
@@ -317,17 +433,14 @@ static jintArray PtyHost_start(
             close(pts);
         }
 
-        LOGD("[EXEC ] exec %s", argv[0]); // [LOG+]
+        CLOG("[EXEC ] exec %s", argv[0]); // [LOG+]
         // Last: logging above may still use an fd of its own.
-        close_inherited_fds();
+        close_inherited_fds(open_fds, open_count);
 
         if (envv) {
             // execvpe looks argv[0] up in getenv("PATH"), the server's own PATH, not envv's: a
             // bare command would ignore the PATH order it was given (preferSystemBinaries).
-            // Making envv our environ first has execvp search and pass on the same one. No
-            // allocation, so it's safe in a child forked from a threaded process.
-            environ = (char **) envv;
-            execvp(argv[0], (char *const *) argv);
+            exec_with_path(argv[0], (char *const *) argv, (char *const *) envv);
         } else {
             execvp(argv[0], (char *const *) argv);
         }
