@@ -52,7 +52,20 @@ void broker_name(char* out, size_t size) {
 }  // namespace
 
 int connect_server() {
-    return connect_abstract(SOCKET_NAME);
+    const int fd = connect_abstract(SOCKET_NAME);
+    if (fd < 0) return -1;
+
+    // First come, first served here too: an app could take the name before the server does and
+    // get our stdio. The server runs as root or shell only, which no app can be.
+    ucred cred{};
+    socklen_t cred_len = sizeof(cred);
+    if (::getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &cred_len) != 0 ||
+        (cred.uid != 0 && cred.uid != 2000)) {
+        ::close(fd);
+        errno = EPERM;
+        return -1;
+    }
+    return fd;
 }
 
 int connect_broker() {
