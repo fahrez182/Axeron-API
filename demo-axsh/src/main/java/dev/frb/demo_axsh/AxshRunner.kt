@@ -58,7 +58,7 @@ object AxshRunner {
      * libaxsh.so straight from [ProcessBuilder] rather than through libsu, so stdout and stderr
      * stay apart and the exit code is the shell's own: both are part of what is being tested.
      */
-    fun runProcess(command: String, stdin: String? = null, axsh: File? = Application.axsh): AxshResult {
+    fun runProcess(command: String, stdin: String? = null, axsh: File? = App.axsh): AxshResult {
         val start = System.nanoTime()
         fun elapsed() = (System.nanoTime() - start) / 1_000_000
         if (axsh == null) return AxshResult(-1, "", "", 0, "libaxsh.so not found")
@@ -80,7 +80,7 @@ object AxshRunner {
     }
 
     /**
-     * Through a cached libsu shell, made into a job by [job]: libsu's main shell (Application
+     * Through a cached libsu shell, made into a job by [job]: libsu's main shell (App
      * points its builder at libaxsh.so) or the one on [Axsh.newProcess]. The first call pays for
      * starting it; the rest are a write to an already open shell.
      *

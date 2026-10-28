@@ -1,8 +1,15 @@
 package dev.frb.demo_axsh
 
 import android.content.Intent
+import android.content.IntentFilter
+import android.os.Binder
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.Parcel
+import android.os.Process
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import com.topjohnwu.superuser.ipc.RootService
 import frb.axeron.shell.AxShellService
 import java.util.concurrent.Callable
@@ -36,6 +43,7 @@ private fun AxshResult.why() = error ?: stderr.trim().lines().lastOrNull()?.take
 
 private fun sh(command: String, stdin: String? = null) = AxshRunner.run(command, stdin)
 
+private const val COLD_START = "Cold start"
 private const val CONNECTION = "Connection"
 private const val SHELL = "Shell"
 private const val PRIVILEGES = "Privileges"
@@ -46,6 +54,9 @@ private const val SHELL_SERVICE_DAEMON = "AxShellService daemon"
 
 /** One line under each section's title. */
 val sectionInfo: Map<String, String> = mapOf(
+    COLD_START to "Getting the server binder, the first thing an app does. The sticky is the new " +
+            "path, the manager relay the old one. Force-stop AxManager before running the relay " +
+            "to see what waking it costs.",
     CONNECTION to "How this app reaches AxManager's server through axsh.",
     SHELL to "Exit code, streams, stdin and env of an axsh shell.",
     PRIVILEGES to "What the shell can do and the app can't. uid 2000: ADB mode, 0: root.",
@@ -239,7 +250,7 @@ private val mainTests: List<AxshTest> = listOf(
             return@AxshTest info("skipped by libsu: main shell isn't root (ADB mode)")
         }
         val connection = UserServiceConnection()
-        val intent = Intent(Application.app, RootUserService::class.java)
+        val intent = Intent(App.app, RootUserService::class.java)
         mainHandler.post { RootService.bind(intent, connection) }
         try {
             val service = connection.waitForService()
@@ -260,7 +271,7 @@ private val mainTests: List<AxshTest> = listOf(
         "Binds UserService1, shows its uid and SELinux context."
     ) {
         val connection = UserServiceConnection()
-        val intent = Intent(Application.app, UserService1::class.java)
+        val intent = Intent(App.app, UserService1::class.java)
         mainHandler.post { AxShellService.bind(intent, connection) }
         try {
             val service = connection.waitForService()
@@ -279,7 +290,7 @@ private val mainTests: List<AxshTest> = listOf(
         "`id`, run by Runtime.exec inside UserService1."
     ) {
         val connection = UserServiceConnection()
-        val intent = Intent(Application.app, UserService1::class.java)
+        val intent = Intent(App.app, UserService1::class.java)
         mainHandler.post { AxShellService.bind(intent, connection) }
         try {
             val service = connection.waitForService()
@@ -297,8 +308,8 @@ private val mainTests: List<AxshTest> = listOf(
     ) {
         val connection1 = UserServiceConnection()
         val connection2 = UserServiceConnection()
-        val intent1 = Intent(Application.app, UserService1::class.java)
-        val intent2 = Intent(Application.app, UserService2::class.java)
+        val intent1 = Intent(App.app, UserService1::class.java)
+        val intent2 = Intent(App.app, UserService2::class.java)
         mainHandler.post { AxShellService.bind(intent1, connection1) }
         mainHandler.post { AxShellService.bind(intent2, connection2) }
         try {
@@ -325,8 +336,8 @@ private val mainTests: List<AxshTest> = listOf(
     ) {
         val connection1 = UserServiceConnection()
         val connection2 = UserServiceConnection()
-        val intent1 = Intent(Application.app, UserService1::class.java)
-        val intent2 = Intent(Application.app, UserService2::class.java)
+        val intent1 = Intent(App.app, UserService1::class.java)
+        val intent2 = Intent(App.app, UserService2::class.java)
         mainHandler.post { AxShellService.bind(intent1, connection1) }
         mainHandler.post { AxShellService.bind(intent2, connection2) }
         try {
@@ -350,7 +361,7 @@ private val mainTests: List<AxshTest> = listOf(
         "A clipboard call from the service's Context; shows its op package."
     ) {
         val connection = UserServiceConnection()
-        val intent = Intent(Application.app, UserService1::class.java)
+        val intent = Intent(App.app, UserService1::class.java)
         mainHandler.post { AxShellService.bind(intent, connection) }
         try {
             val service = connection.waitForService()
@@ -368,7 +379,7 @@ private val mainTests: List<AxshTest> = listOf(
         "What getApplicationContext() returns inside the service."
     ) {
         val connection = UserServiceConnection()
-        val intent = Intent(Application.app, UserService1::class.java)
+        val intent = Intent(App.app, UserService1::class.java)
         mainHandler.post { AxShellService.bind(intent, connection) }
         try {
             val service = connection.waitForService()
@@ -397,7 +408,7 @@ private val daemonTests: List<AxshTest> = listOf(
         SHELL_SERVICE_DAEMON, "Bind, unbind, bind again",
         "Pid before and after an unbind."
     ) {
-        val intent = Intent(Application.app, DaemonService::class.java)
+        val intent = Intent(App.app, DaemonService::class.java)
         intent.addCategory(AxShellService.CATEGORY_DAEMON_MODE)
 
         val connection1 = UserServiceConnection()
@@ -427,7 +438,7 @@ private val daemonTests: List<AxshTest> = listOf(
         SHELL_SERVICE_DAEMON, "Survives closing the app",
         "Shows the pid. Run, close the app from Recents, reopen, run again."
     ) {
-        val intent = Intent(Application.app, DaemonService::class.java)
+        val intent = Intent(App.app, DaemonService::class.java)
         intent.addCategory(AxShellService.CATEGORY_DAEMON_MODE)
         val connection = UserServiceConnection()
         mainHandler.post { AxShellService.bind(intent, connection) }
@@ -446,7 +457,7 @@ private val daemonTests: List<AxshTest> = listOf(
         SHELL_SERVICE_DAEMON, "Stop it",
         "stop(), then bind again: shows the new pid."
     ) {
-        val intent = Intent(Application.app, DaemonService::class.java)
+        val intent = Intent(App.app, DaemonService::class.java)
         intent.addCategory(AxShellService.CATEGORY_DAEMON_MODE)
         mainHandler.post { AxShellService.stop(intent) }
 
@@ -465,5 +476,59 @@ private val daemonTests: List<AxshTest> = listOf(
     },
 )
 
+private val coldStartTests: List<AxshTest> = listOf(
+    AxshTest(
+        COLD_START, "Sticky (new path)",
+        "registerReceiver(null, SERVER_BINDER): the first call, then 5 more. Needs the server running."
+    ) {
+        val filter = IntentFilter("AxRuntime.SERVER_BINDER")
+        val millis = mutableListOf<Double>()
+        var binder: android.os.IBinder? = null
+        repeat(6) {
+            val start = System.nanoTime()
+            val sticky = App.app.registerReceiver(null, filter)
+            millis += (System.nanoTime() - start) / 1_000_000.0
+            binder = sticky?.getBundleExtra("data")?.getBinder("binder")
+        }
+        val ping = binder?.pingBinder()
+        info(
+            "first %.2fms, next %s, ping=%s".format(
+                millis[0], millis.drop(1).joinToString(" ") { "%.2f".format(it) }, ping
+            ),
+            "binder: $binder\nms each: $millis"
+        )
+    },
+    AxshTest(
+        COLD_START, "Manager relay (old path)",
+        "Broadcast REQUEST_BINDER to AxManager and wait for its reply (5s). With AxManager " +
+                "force-stopped this includes waking it."
+    ) {
+        val latch = CountDownLatch(1)
+        val start = System.nanoTime()
+        var replyMillis = -1.0
+        val receiver = object : Binder() {
+            override fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
+                if (code != 1) return super.onTransact(code, data, reply, flags)
+                if (latch.count > 0) {
+                    replyMillis = (System.nanoTime() - start) / 1_000_000.0
+                    latch.countDown()
+                }
+                return true
+            }
+        }
+        val intent = Intent("AxRuntime.REQUEST_BINDER")
+            .setPackage(App.MANAGER_PACKAGE)
+            .addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES or Intent.FLAG_RECEIVER_FOREGROUND)
+            .putExtra("data", Bundle().apply {
+                putBinder("binder", receiver)
+                putInt("uid", Process.myUid())
+            })
+        App.app.sendBroadcast(intent)
+        val answered = latch.await(5, TimeUnit.SECONDS)
+        if (answered) info("reply after %.1fms".format(replyMillis), "reply after $replyMillis ms")
+        else fail("no reply in 5000ms", "AxManager didn't answer: not running, or blocked from starting")
+    },
+)
+
 // Declared last: top-level vals initialize in file order.
-val axshTests: List<AxshTest> = mainTests + daemonTests
+val axshTests: List<AxshTest> = coldStartTests + mainTests + daemonTests

@@ -172,7 +172,7 @@ private fun ModeCard(
     onRunAll: () -> Unit,
 ) {
     val context = LocalContext.current
-    val direct = Application.directConnection
+    val direct = App.directConnection
     val done = states.filterIsInstance<TestState.Done>()
 
     Card(shape = RoundedCornerShape(20.dp)) {
@@ -192,11 +192,11 @@ private fun ModeCard(
                 Switch(
                     checked = direct,
                     enabled = !runningAll,
-                    onCheckedChange = { Application.switchDirectConnection(context, it) },
+                    onCheckedChange = { App.switchDirectConnection(context, it) },
                 )
             }
             Text(
-                Application.axsh?.absolutePath ?: "libaxsh.so not found: is AxManager installed?",
+                App.axsh?.absolutePath ?: "libaxsh.so not found: is AxManager installed?",
                 fontFamily = FontFamily.Monospace,
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -216,7 +216,7 @@ private fun ModeCard(
                         selected = runner == it,
                         onClick = { onRunner(it) },
                         // No exec needs the broker, which only direct connection starts.
-                        enabled = !runningAll && (it != Runner.LIBSU_DIRECT || Application.directConnection),
+                        enabled = !runningAll && (it != Runner.LIBSU_DIRECT || App.directConnection),
                         label = { Text(it.label) },
                     )
                 }
@@ -242,7 +242,7 @@ private fun ModeCard(
             }
 
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Button(onClick = onRunAll, enabled = !runningAll && Application.axsh != null) {
+                Button(onClick = onRunAll, enabled = !runningAll && App.axsh != null) {
                     Text(if (runningAll) "Running…" else "Run all")
                 }
                 Spacer(Modifier.width(12.dp))
@@ -367,7 +367,7 @@ private fun CustomCommandCard() {
                         running = false
                     }
                 },
-                enabled = !running && command.isNotBlank() && Application.axsh != null,
+                enabled = !running && command.isNotBlank() && App.axsh != null,
             ) { Text(if (running) "Running…" else "Run") }
             result?.let { r ->
                 OutputBox(buildString {
