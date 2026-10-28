@@ -2,11 +2,13 @@ package frb.axeron.api
 
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
+import android.os.Binder
 import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.Parcel
+import android.os.Process
 import android.os.RemoteException
 import android.util.Log
 import androidx.annotation.RestrictTo
@@ -18,6 +20,8 @@ import frb.axeron.server.IAxeronService
 import frb.axeron.server.PluginInfo
 import frb.axeron.shared.AxeronApiConstant
 import frb.axeron.shared.AxeronApiConstant.server.TYPE_ENV
+import frb.axeron.shared.ShizukuApiConstant.ATTACH_APPLICATION_API_VERSION
+import frb.axeron.shared.ShizukuApiConstant.ATTACH_APPLICATION_PACKAGE_NAME
 import frb.axeron.shared.ShizukuApiConstant.BINDER_TRANSACTION_transact
 import frb.axeron.shared.ShizukuApiConstant.BIND_APPLICATION_PERMISSION_GRANTED
 import frb.axeron.shared.ShizukuApiConstant.BIND_APPLICATION_SHOULD_SHOW_REQUEST_PERMISSION_RATIONALE
@@ -57,9 +61,36 @@ object Axeron {
     private var permissionGranted = false
     private var shouldShowRequestPermissionRationale = false
 
+    /**
+     * Whether the binder is the server's: it called [SHIZUKU_APPLICATION] back from root or shell.
+     * A binder pushed through a provider, or read from a sticky, was written by whoever could
+     * reach them, but the uid of a call into this process can't be set by its caller.
+     */
+    @Volatile
+    private var serverVerified = false
+
+    @JvmStatic
+    fun isServerVerified(): Boolean = serverVerified
+
+    /** The uid of the last bindApplication call, -1 for none yet; to show why a binder isn't verified. */
+    @Volatile
+    private var callbackUid = -1
+
+    @JvmStatic
+    fun serverCallbackUid(): Int = callbackUid
+
     private val SHIZUKU_APPLICATION = object : IShizukuApplication.Stub() {
 
         override fun bindApplication(data: Bundle) {
+            val caller = Binder.getCallingUid()
+            callbackUid = caller
+            if (caller != Process.ROOT_UID && caller != Process.SHELL_UID) {
+                Log.w(TAG, "bindApplication from uid $caller, not the server: dropping its binder")
+                onBinderReceived(null, null)
+                return
+            }
+            serverVerified = true
+
             permissionGranted = data.getBoolean(BIND_APPLICATION_PERMISSION_GRANTED, false)
             shouldShowRequestPermissionRationale =
                 data.getBoolean(BIND_APPLICATION_SHOULD_SHOW_REQUEST_PERMISSION_RATIONALE, false)
@@ -265,6 +296,8 @@ object Axeron {
             binder = null
             service = null
             axeronInfo = null
+            serverVerified = false
+            callbackUid = -1
 
             scheduleBinderDeadListeners()
         } else {
@@ -274,6 +307,8 @@ object Axeron {
             binder = newBinder
             service = IAxeronService.Stub.asInterface(newBinder)
             axeronInfo = null
+            serverVerified = false
+            callbackUid = -1
 
             try {
                 newBinder.linkToDeath(DEATH_RECIPIENT, 0)
@@ -282,7 +317,7 @@ object Axeron {
             }
 
             try {
-                attachApplication(newBinder, packageName)
+                attachApplication(IAxeronService.Stub.asInterface(newBinder), packageName)
                 Log.i("ShizukuApplication", "attachApplication")
             } catch (e: Throwable) {
                 Log.w("ShizukuApplication", Log.getStackTraceString(e))
@@ -292,20 +327,18 @@ object Axeron {
         }
     }
 
+    /**
+     * Through the AIDL method. The raw transaction 14 this used to send is not attachApplication
+     * on this binder any more: it is setNewEnvironment, so the server never saw the attach and
+     * never called [SHIZUKU_APPLICATION] back, which is also what [serverVerified] waits for.
+     */
     @Throws(RemoteException::class)
-    private fun attachApplication(binder: IBinder, packageName: String?) {
-        val data = Parcel.obtain()
-        val reply = Parcel.obtain()
-        try {
-            data.writeInterfaceToken(IAxeronService.DESCRIPTOR)
-            data.writeStrongBinder(SHIZUKU_APPLICATION.asBinder())
-            data.writeString(packageName)
-            binder.transact(14, data, reply, 0)
-            reply.readException()
-        } finally {
-            reply.recycle()
-            data.recycle()
+    private fun attachApplication(service: IAxeronService, packageName: String?) {
+        val args = Bundle().apply {
+            putString(ATTACH_APPLICATION_PACKAGE_NAME, packageName)
+            putInt(ATTACH_APPLICATION_API_VERSION, -1)
         }
+        service.attachApplication(SHIZUKU_APPLICATION, args)
     }
 
     @JvmStatic

@@ -24,9 +24,9 @@ public class ServerConstants {
     public static final int MANAGER_APP_NOT_FOUND = 50;
 
     public static final String PERMISSION = "moe.shizuku.manager.permission.API_V23";
-    public static final String MANAGER_APPLICATION_ID = "frb.axeron.manager";
     public static final String SHIZUKU_MANAGER_APPLICATION_ID = "moe.shizuku.privileged.api";
-    public static final String REQUEST_PERMISSION_ACTION = MANAGER_APPLICATION_ID + ".intent.action.REQUEST_PERMISSION";
+    // No package in it: the server sends it to whichever manager it found (setPackage).
+    public static final String REQUEST_PERMISSION_ACTION = "AxRuntime.REQUEST_PERMISSION";
     public static final String REQUEST_BINDER_AXRUNTIME = "AxRuntime.REQUEST_BINDER";
 
     public static final int BINDER_TRANSACTION_getApplications = 10001;

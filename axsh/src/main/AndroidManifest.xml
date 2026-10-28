@@ -1,11 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- AxshBroker asks the manager for the server binder; Android 11+ hides it otherwise. -->
-    <queries>
-        <package android:name="frb.axeron.manager" />
-    </queries>
-
     <application>
         <!-- AxShellService: its processes hand their binder in here (it checks their uid), and it
              keeps the app's Context for AxShellService.bind. -->

@@ -11,7 +11,6 @@ import android.content.IContentProvider
 import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.ApplicationInfo
-import android.content.pm.PackageManager
 import android.ddm.DdmHandleAppName
 import android.database.Cursor
 import android.net.LocalServerSocket
@@ -139,8 +138,8 @@ abstract class AxShellService : ContextWrapper(null) {
         fun lastFailure(component: ComponentName): String? = ShellServiceClient.failures[component]
 
         /**
-         * Default: [Axsh.exec] through this app's AxBroker; while none runs, the manager's
-         * `libaxsh.so -c`.
+         * Default: [Axsh.exec] through this app's AxBroker, which needs [AxBroker.start]. An app
+         * without a broker sets its own, e.g. one that runs a libaxsh.so with `-c`.
          */
         @JvmStatic
         fun setLauncher(launcher: Launcher) {
@@ -189,9 +188,6 @@ internal object ShellServiceClient {
     private val main = Handler(Looper.getMainLooper())
     val mainExecutor = Executor { main.post(it) }
 
-    // Mirrors AxBroker's.
-    private const val MANAGER_PACKAGE = "frb.axeron.manager"
-
     /**
      * For a debuggable app: JDWP in the service's process, as the server's ServiceStarter gives
      * Shizuku user services, so Studio's "Attach Debugger" lists it (named by ShellServiceRemote).
@@ -215,22 +211,12 @@ internal object ShellServiceClient {
     var launcher = AxShellService.Launcher(::defaultLaunch)
 
     /**
-     * AxBroker has no "running" state of its own: without [AxBroker.start] it has no way to the binder,
-     * and [Axsh.exec] says so at once with an IOException. Then as a no-broker app does, through
-     * the manager's libaxsh.so (its bootstrap asks the manager for the binder itself).
+     * Through axsh, which needs [AxBroker.start] to have run: without it AxBroker has no way to
+     * the binder, and [Axsh.exec] says so at once with an IOException. There is no fallback to
+     * the manager's libaxsh.so: finding it takes the manager's package name, which nothing here
+     * knows.
      */
-    private fun defaultLaunch(argv: Array<String>): java.lang.Process = try {
-        Axsh.exec(argv)
-    } catch (e: IOException) {
-        val axsh = try {
-            File(context.packageManager.getApplicationInfo(MANAGER_PACKAGE, 0).nativeLibraryDir, "libaxsh.so")
-        } catch (_: PackageManager.NameNotFoundException) {
-            throw e
-        }
-        Log.i(TAG, "Axsh.exec: ${e.message}; through $axsh")
-        val command = argv.joinToString(" ") { "'" + it.replace("'", "'\\''") + "'" }
-        ProcessBuilder(axsh.path, "-c", "exec $command").start()
-    }
+    private fun defaultLaunch(argv: Array<String>): java.lang.Process = Axsh.exec(argv)
 
     /** This app, kept by [ShellServiceProvider.onCreate]: providers start before the Application. */
     @Volatile

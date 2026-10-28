@@ -78,7 +78,7 @@ object Bootstrap {
         val daemon = AtomicReference<Daemon?>(null)
         val listening = AtomicBoolean(false)
         val starter = AtomicReference<Thread?>(null)
-        AxBroker.serveOne(socket, ::broadcast) { minutes ->
+        AxBroker.serveOne(socket, ownerPackage(System.getProperty("java.class.path")), ::broadcast) { minutes ->
             if (minutes == KeepAlive.OFF || keptMinutes[0] != KeepAlive.OFF) return@serveOne
             keptMinutes[0] = minutes
             // Not on this binder thread: the channel is a call to the server, which needs the
@@ -143,6 +143,20 @@ object Bootstrap {
             Log.w(TAG, "can't start the native daemon", e)
             Daemon.UNSUPPORTED
         }
+    }
+
+    /**
+     * The package this bootstrap was started from, which is the manager to ask for the binder.
+     * app_process is given `<app dir>/lib/<abi>/libaxshboot.so` or `<app dir>/base.apk`, and an
+     * app dir is named `<package>-<suffix>`; a package name has no '-', so it ends at the first.
+     */
+    private fun ownerPackage(classPath: String?): String? {
+        val entry = File(classPath?.substringBefore(':') ?: return null)
+        val appDir = (if (entry.name == "base.apk") entry.parentFile
+        else entry.parentFile?.parentFile?.parentFile) ?: return null
+        val name = appDir.name
+        val pkg = name.substringBefore('-')
+        return pkg.takeIf { pkg.length < name.length && '.' in pkg }
     }
 
     // Not the (Intent, userId) overload: it goes sticky for intents without a component, which

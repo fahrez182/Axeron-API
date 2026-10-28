@@ -17,7 +17,11 @@ data class ServerInfo(
     val pid: Int = -1,
     val selinuxContext: String = "Unknown",
     val starting: Long = SystemClock.elapsedRealtime(),
-    val permission: Boolean = false
+    val permission: Boolean = false,
+    /** SHA-256 of the signing certificate of the manager this server started from. */
+    val managerCert: String = "",
+    /** Whether the one who asked is that manager: same package, same certificate. */
+    val callerIsManager: Boolean = false
 ) : Parcelable {
 
     fun getMode(): Mode {

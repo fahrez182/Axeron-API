@@ -89,7 +89,10 @@ object Axsh {
         cols: Int,
         terminalEnv: Map<String, String>,
     ): Terminal {
-        val service = AxBroker.service() ?: throw IOException("AxManager server is not reachable")
+        val service = AxBroker.service() ?: throw IOException(
+            AxBroker.unavailableReason()?.let { "AxManager server is not reachable [$it]" }
+                ?: "AxManager server is not reachable"
+        )
 
         // [0] read end, [1] write end. The server gets stdin's read end and the others' write
         // ends. A PTY merges stderr into stdout, so it has no pipe of its own then.

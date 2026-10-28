@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.util.Log
 import com.topjohnwu.superuser.Shell
 import frb.axeron.shell.AxBroker
+import frb.axeron.shell.AxShellService
 import java.io.File
 import kotlin.system.exitProcess
 
@@ -33,6 +34,12 @@ class App : Application() {
         Log.i(TAG, "direct=$directConnection axsh=${axsh?.absolutePath} (exists=${axsh?.exists()})")
 
         val path = axsh?.absolutePath ?: return
+        // No broker here, so AxShellService has no Axsh.exec to launch with: it runs the manager's
+        // libaxsh.so itself, as a no-broker app does.
+        if (!directConnection) AxShellService.setLauncher { argv ->
+            val command = argv.joinToString(" ") { "'" + it.replace("'", "'\\''") + "'" }
+            ProcessBuilder(path, "-c", "exec $command").start()
+        }
         Shell.enableLegacyStderrRedirection = true
         Shell.enableVerboseLogging = BuildConfig.DEBUG
         Shell.setDefaultBuilder(Shell.Builder.create().setCommands(path))
