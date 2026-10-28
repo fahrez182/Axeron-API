@@ -37,6 +37,7 @@ private fun AxshResult.why() = error ?: stderr.trim().lines().lastOrNull()?.take
 private fun sh(command: String, stdin: String? = null) = AxshRunner.run(command, stdin)
 
 private const val COLD_START = "Cold start"
+private const val SECURITY = "Security"
 private const val CONNECTION = "Connection"
 private const val SHELL = "Shell"
 private const val PRIVILEGES = "Privileges"
@@ -49,6 +50,8 @@ private const val SHELL_SERVICE_DAEMON = "AxShellService daemon"
 val sectionInfo: Map<String, String> = mapOf(
     COLD_START to "Getting to the server, the first thing an app does: nothing is published to " +
             "pick up; an allowed app is pushed its capability, and the manager is found by the API.",
+    SECURITY to "What another app could try against AxManager 3.0, done from this one. Each shows " +
+            "what it got back.",
     CONNECTION to "How this app reaches AxManager's server through axsh.",
     SHELL to "Exit code, streams, stdin and env of an axsh shell.",
     PRIVILEGES to "What the shell can do and the app can't. uid 2000: ADB mode, 0: root.",
@@ -531,5 +534,50 @@ private val coldStartTests: List<AxshTest> = listOf(
     },
 )
 
+private val securityTests: List<AxshTest> = listOf(
+    AxshTest(
+        SECURITY, "Knock on the old server socket",
+        "Connects to @axeron, the server's socket name before 3.0. The name is now new on every " +
+                "start and only told to allowed apps, so nothing should listen there."
+    ) {
+        val socket = android.net.LocalSocket()
+        val result = try {
+            socket.connect(android.net.LocalSocketAddress("axeron", android.net.LocalSocketAddress.Namespace.ABSTRACT))
+            "connected (peer uid=${socket.peerCredentials.uid})"
+        } catch (e: java.io.IOException) {
+            "refused: ${e.message}"
+        } finally {
+            socket.close()
+        }
+        info(result, result)
+    },
+    AxshTest(
+        SECURITY, "Hand ourselves a capability",
+        "Calls this app's own axsh provider as if it were the server, to plant a binder. Only the " +
+                "server's uids (root, shell) are heard, so it should answer nothing."
+    ) {
+        // What an attacker would write: the provider's authority, method and key, as axsh uses them.
+        val authority = "${App.app.packageName}.axeron"
+        val extras = android.os.Bundle().apply { putBinder("axeron:capability", android.os.Binder()) }
+        val result = try {
+            val reply = App.app.contentResolver.call(
+                android.net.Uri.parse("content://$authority"), "sendCapability", null, extras
+            )
+            "reply=$reply"
+        } catch (e: Exception) {
+            "threw: $e"
+        }
+        info(result, "authority: $authority\n$result\nuid: ${android.os.Process.myUid()}")
+    },
+    AxshTest(
+        SECURITY, "Find AxManager",
+        "AxBroker.findManager: what any app with the axsh library sees. Null when AxManager is in " +
+                "stealth mode, as when it isn't installed."
+    ) {
+        val manager = frb.axeron.shell.AxBroker.findManager(App.app)
+        info("package=${manager?.packageName}", "package: ${manager?.packageName}\nuid: ${manager?.uid}")
+    },
+)
+
 // Declared last: top-level vals initialize in file order.
-val axshTests: List<AxshTest> = coldStartTests + mainTests + daemonTests
+val axshTests: List<AxshTest> = coldStartTests + securityTests + mainTests + daemonTests
