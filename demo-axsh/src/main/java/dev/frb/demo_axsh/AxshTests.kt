@@ -478,6 +478,46 @@ private val daemonTests: List<AxshTest> = listOf(
 
 private val coldStartTests: List<AxshTest> = listOf(
     AxshTest(
+        COLD_START, "First Axsh.exec vs next",
+        "Axsh.exec(true) three times: the first one pulls the sticky and verifies the server " +
+                "(attach + callback); the next ones reuse it. Needs AxBroker.start. Runs first."
+    ) {
+        if (!App.directConnection) return@AxshTest info("not run: needs the direct connection (AxBroker.start)")
+        val millis = mutableListOf<Double>()
+        repeat(3) {
+            val start = System.nanoTime()
+            val exit = frb.axeron.shell.Axsh.exec(arrayOf("true")).waitFor()
+            millis += (System.nanoTime() - start) / 1_000_000.0
+            if (exit != 0) fail("exit=$exit", "Axsh.exec(true) exit=$exit")
+        }
+        info(
+            "first %.2fms, next %s, first-minus-next %.2fms".format(
+                millis[0], millis.drop(1).joinToString(" ") { "%.2f".format(it) },
+                millis[0] - millis[1]
+            ),
+            "ms each: $millis"
+        )
+    },
+    AxshTest(
+        COLD_START, "Exec cost: PATH, absolute, local",
+        "Four runs each of: Axsh.exec(true) through PATH, Axsh.exec(/system/bin/true), and " +
+                "Runtime.exec(/system/bin/true) in this app's own process, no server involved."
+    ) {
+        if (!App.directConnection) return@AxshTest info("not run: needs the direct connection (AxBroker.start)")
+        fun run(block: () -> java.lang.Process): List<Double> = List(4) {
+            val start = System.nanoTime()
+            block().waitFor()
+            (System.nanoTime() - start) / 1_000_000.0
+        }
+        val path = run { frb.axeron.shell.Axsh.exec(arrayOf("true")) }
+        val absolute = run { frb.axeron.shell.Axsh.exec(arrayOf("/system/bin/true")) }
+        val local = run { Runtime.getRuntime().exec(arrayOf("/system/bin/true")) }
+        info(
+            "path %.1f, absolute %.1f, local %.1f (ms, last of 4)".format(path.last(), absolute.last(), local.last()),
+            "path: $path\nabsolute: $absolute\nlocal: $local"
+        )
+    },
+    AxshTest(
         COLD_START, "Sticky (new path)",
         "registerReceiver(null, SERVER_BINDER): the first call, then 5 more. Needs the server running."
     ) {
