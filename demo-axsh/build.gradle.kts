@@ -12,6 +12,9 @@ android {
 
     defaultConfig {
         applicationId = "dev.frb.demo_axsh"
+        // The demo's own version. The code stays the API's (from the root build): demos up to
+        // 2.1.x carried the API's 21xxx, and a lower code would refuse to install over them.
+        versionName = "2.0.0"
     }
 
     buildTypes {
