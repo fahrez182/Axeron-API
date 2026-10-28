@@ -101,6 +101,27 @@ abstract class AxShellService : ContextWrapper(null) {
         fun launch(argv: Array<String>): java.lang.Process
     }
 
+    /**
+     * The start of a service process that [bindOrTask] left to the caller, like libsu's
+     * bindOrTask: [run] it once with the [Launcher] for this bind. Until it runs, the bind waits.
+     * A bind that later moves to a new process starts that one with the same launcher.
+     */
+    class Task internal constructor(
+        /** The command line the launcher will be given, for a look before running it. */
+        val argv: Array<String>,
+        private val start: (Launcher) -> Unit,
+    ) {
+        private var ran = false
+
+        fun run(launcher: Launcher) {
+            synchronized(this) {
+                check(!ran) { "this task already ran" }
+                ran = true
+            }
+            start(launcher)
+        }
+    }
+
     companion object {
         /**
          * An intent with this category binds its service in the daemon process, as libsu's
@@ -116,6 +137,19 @@ abstract class AxShellService : ContextWrapper(null) {
         @JvmStatic
         fun bind(intent: Intent, executor: Executor, connection: ServiceConnection) =
             ShellServiceClient.bind(intent, executor, connection)
+
+        /**
+         * As [bind], but a service process this bind needs is not started with [setLauncher]'s
+         * launcher: the [Task] to start it is returned, to run with one of the caller's own, per
+         * bind. Null when the process is already running or starting (the bind joins it).
+         */
+        @JvmStatic
+        fun bindOrTask(intent: Intent, connection: ServiceConnection): Task? =
+            ShellServiceClient.bindOrTask(intent, ShellServiceClient.mainExecutor, connection)
+
+        @JvmStatic
+        fun bindOrTask(intent: Intent, executor: Executor, connection: ServiceConnection): Task? =
+            ShellServiceClient.bindOrTask(intent, executor, connection)
 
         @JvmStatic
         fun unbind(connection: ServiceConnection) = ShellServiceClient.unbind(connection)
@@ -256,6 +290,10 @@ internal object ShellServiceClient {
         @Volatile
         var process: java.lang.Process? = null
 
+        /** What started it; a bind moving on from it starts the next process the same way. */
+        @Volatile
+        var launcher: AxShellService.Launcher? = null
+
         @Volatile
         var control: IBinder? = null
 
@@ -279,15 +317,34 @@ internal object ShellServiceClient {
 
     fun bind(intent: Intent, executor: Executor, connection: ServiceConnection) {
         checkMainThread()
-        bind(intent, executor, connection, retried = false)
+        bind(intent, executor, connection, retried = false, launcher = launcher)
     }
 
-    private fun bind(intent: Intent, executor: Executor, connection: ServiceConnection, retried: Boolean) {
+    fun bindOrTask(intent: Intent, executor: Executor, connection: ServiceConnection): AxShellService.Task? {
+        checkMainThread()
+        val daemon = isDaemon(intent)
+        val fresh = procs[daemon] == null
+        bind(intent, executor, connection, retried = false, launcher = null)
+        if (!fresh) return null
+        val proc = procs.getValue(daemon)
+        return AxShellService.Task(argv(daemon)) { launcher -> start(proc, launcher) }
+    }
+
+    /** [launcher] null: a process this needs is created but left for a Task to start. */
+    private fun bind(
+        intent: Intent,
+        executor: Executor,
+        connection: ServiceConnection,
+        retried: Boolean,
+        launcher: AxShellService.Launcher?,
+    ) {
         val component = requireNotNull(intent.component) { "the intent has no component" }
         require(component.packageName == context.packageName) {
             "ShellServices outside of this app are not supported"
         }
-        val proc = procs.getOrPut(isDaemon(intent)) { Proc(isDaemon(intent)).also(::start) }
+        val proc = procs.getOrPut(isDaemon(intent)) {
+            Proc(isDaemon(intent)).also { if (launcher != null) start(it, launcher) }
+        }
         val bound = proc.bound.getOrPut(component) {
             failures.remove(component)
             Bound(component, Intent(intent), retried).also { if (proc.control != null) sendBind(proc, it) }
@@ -402,7 +459,8 @@ internal object ShellServiceClient {
         )
     }
 
-    private fun start(proc: Proc) {
+    private fun start(proc: Proc, launcher: AxShellService.Launcher) {
+        proc.launcher = launcher
         starting[proc.token] = proc
         val argv = argv(proc.daemon)
         // The launcher may block (binder, AxManager's permission dialog): not on the main thread.
@@ -495,7 +553,7 @@ internal object ShellServiceClient {
                     executor.execute { conn.onServiceDisconnected(bound.component) }
                 }
                 proc.control != null && !bound.retried -> bound.connections.forEach { (conn, executor) ->
-                    bind(bound.intent, executor, conn, retried = true)
+                    bind(bound.intent, executor, conn, retried = true, launcher = proc.launcher ?: launcher)
                 }
                 else -> {
                     val why = if (died && proc.control == null) "its process never connected" else "its process went"
