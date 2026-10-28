@@ -1,8 +1,11 @@
 package frb.axeron.shell
 
+import android.app.Activity
+import android.content.ActivityNotFoundException
+import android.content.ComponentName
 import android.content.Context
+import android.content.pm.ApplicationInfo
 import android.content.Intent
-import android.content.IntentFilter
 import android.net.LocalSocket
 import android.os.Binder
 import android.os.Bundle
@@ -11,12 +14,14 @@ import android.os.Parcel
 import android.os.ParcelFileDescriptor
 import android.os.Process
 import android.os.SystemClock
+import android.system.Os
 import android.util.Log
 import frb.axeron.server.IAxeronService
 import frb.axeron.shared.AxeronApiConstant
 import frb.axeron.shared.ShizukuApiConstant
 import moe.shizuku.server.IShizukuApplication
 import rikka.hidden.compat.PackageManagerApis
+import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
@@ -27,23 +32,27 @@ import java.util.concurrent.TimeUnit
  * (`shell` in ADB mode). This broker listens on `@axsh.<uid>` and serves [Sessions] there,
  * reaching the server over binder, which checks it against this app's uid.
  *
- * The binder comes from the host when it holds one (the manager), otherwise it is pulled from the
- * server's `AxRuntime.SERVER_BINDER` sticky broadcast (an app with a Context), or, failing that
- * and for an app_process client that can't read a sticky ([Bootstrap]), asked of the manager with
- * an `AxRuntime.REQUEST_BINDER` broadcast.
+ * The binder comes from the host when it holds one (the manager). Otherwise an app has its
+ * capability pushed in by the server once AxManager allows it ([AxshProvider]): nothing is
+ * published for an app to find. An app_process client ([Bootstrap]), which has no provider, asks
+ * the manager with an `AxRuntime.REQUEST_BINDER` broadcast.
  */
 object AxBroker : Sessions.Host {
 
     @InternalAxeronApi
     override val tag = "AxshBroker"
 
-    // Mirrors AxeronService.SERVER_BINDER_ACTION: the server's sticky binder, read in-app.
-    private const val ACTION_SERVER_BINDER = "AxRuntime.SERVER_BINDER"
-
     // Mirrors ServerConstants.REQUEST_BINDER_AXRUNTIME: the relay for an app_process client
-    // ([Bootstrap]), which has no app process in AMS and so can't read a sticky.
+    // ([Bootstrap]), which has no provider for the server to push to.
     private const val ACTION_REQUEST_BINDER = "AxRuntime.REQUEST_BINDER"
     private const val BINDER_TIMEOUT_MS = 5_000L
+
+    // How long a cold app's first call waits for the server's push, which it can beat.
+    private const val PUSH_WAIT_MS = 3_000L
+
+    // Mirrors SERVER_NAME_FILE in axsh_protocol.h: where, in the host's $TMPDIR, the native
+    // client finds the server's socket name.
+    private const val SERVER_NAME_FILE = ".axsh-server"
 
     // How long a binder has to call back as the server; a real one does within a few ms.
     private const val VERIFY_TIMEOUT_MS = 2_000L
@@ -58,15 +67,15 @@ object AxBroker : Sessions.Host {
 
     /**
      * The manager to ask for the binder from app_process: the package whose libaxsh this
-     * process was started from, which [Bootstrap] works out. Null for an app, which reads the
-     * server's sticky instead and names no manager.
+     * process was started from, which [Bootstrap] works out. Null for an app, which is pushed its
+     * capability instead and names no manager.
      */
     @Volatile
     private var relayPackage: String? = null
 
-    /** Where an app reads the server's sticky binder from; null in app_process. */
+    /** Started in an app ([start]), which the server pushes to; false in app_process. */
     @Volatile
-    private var stickyContext: Context? = null
+    private var inApp = false
 
     /** Set when the host already holds the server binder; then nothing is asked of the manager. */
     @Volatile
@@ -75,13 +84,31 @@ object AxBroker : Sessions.Host {
     @Volatile
     private var service: IAxeronService? = null
 
+    /** This app's own view of the server, pushed in by it once AxManager allows us (AxshProvider). */
+    @Volatile
+    private var capability: IBinder? = null
+
+    /** Opened by the first capability, for a cold call waiting on it in [requestBinder]. */
+    private val firstPush = CountDownLatch(1)
+
+    /** A newer capability: the next [service] verifies and takes it over whatever it held. */
+    internal fun onCapability(binder: IBinder) {
+        // Before the lock: a call may hold it while it waits on this capability.
+        capability = binder
+        firstPush.countDown()
+        synchronized(this) {
+            service = null
+        }
+        Log.i(tag, "capability received")
+    }
+
     /** Abstract socket name the native client looks for; per-uid so apps never share a broker. */
     @InternalAxeronApi
     fun socketName(uid: Int = Process.myUid()) = "axsh.$uid"
 
     /**
      * @param binder where the host keeps the server binder, if it has one (the manager does);
-     *   null to read it from the server's `AxRuntime.SERVER_BINDER` sticky broadcast.
+     *   null to use the capability the server pushes once AxManager allows this app.
      */
     @JvmStatic
     @JvmOverloads
@@ -89,10 +116,7 @@ object AxBroker : Sessions.Host {
         // On the object, as @Synchronized was before @JvmStatic (which would lock the class):
         // the same monitor service() takes.
         synchronized(this) {
-            // From Application.attachBaseContext, applicationContext is still null (the app isn't
-            // registered yet); the Application itself is the context to keep then.
-            val appContext = context.applicationContext ?: context
-            stickyContext = appContext
+            inApp = true
             packageName = context.packageName
             binderSource = binder
             sessions.listen(socketName())
@@ -101,6 +125,30 @@ object AxBroker : Sessions.Host {
 
     @JvmStatic
     fun stop() = sessions.stop()
+
+    /**
+     * The installed AxManager, as the system resolves its request-access door: no package name
+     * needed (axsh's manifest declares the query). Null when there is none, or in its stealth
+     * mode, where it doesn't show itself to apps.
+     */
+    @JvmStatic
+    fun findManager(context: Context): ApplicationInfo? =
+        context.packageManager.resolveActivity(Intent(AxeronApiConstant.server.ACTION_REQUEST_ACCESS), 0)
+            ?.activityInfo?.applicationInfo
+
+    /**
+     * Asks AxManager to allow this app: its dialog, answered to [activity]'s onActivityResult for
+     * [requestCode] (RESULT_OK once allowed; the server then pushes the capability by itself).
+     * False when nothing on the device takes the request.
+     */
+    @JvmStatic
+    fun requestAccess(activity: Activity, requestCode: Int): Boolean = try {
+        @Suppress("DEPRECATION")
+        activity.startActivityForResult(Intent(AxeronApiConstant.server.ACTION_REQUEST_ACCESS), requestCode)
+        true
+    } catch (e: ActivityNotFoundException) {
+        false
+    }
 
     /**
      * Serves one already-connected client on the calling thread, for [Bootstrap]: no
@@ -152,7 +200,7 @@ object AxBroker : Sessions.Host {
     @InternalAxeronApi
     override fun service(): IAxeronService? {
         // The host's own binder first; while it has none (a cold process the server hasn't pushed
-        // to yet) the sticky below answers instead of failing the first call.
+        // to yet) requestBinder waits a moment for the push instead of failing the first call.
         binderSource?.let { source ->
             source()?.takeIf { it.pingBinder() }?.let { return IAxeronService.Stub.asInterface(it) }
         }
@@ -162,12 +210,13 @@ object AxBroker : Sessions.Host {
             val binder = requestBinder() ?: return null
             val candidate = IAxeronService.Stub.asInterface(binder)
             if (!fromServer(candidate)) return null
+            cacheSocketName(candidate)
             return candidate.also { service = it }
         }
     }
 
     /**
-     * A sticky, or a manager's relay, is only as good as whoever could write it: a binder from
+     * A pushed capability, or a manager's relay, is only as good as whoever could write it: a binder from
      * there may not be the server's, and this one is handed the app's shells and their pipes.
      * What can't be forged is the uid of a call into this process, so the binder is attached and
      * must call [application] back from root or shell, the only uids a server runs as.
@@ -321,43 +370,43 @@ object AxBroker : Sessions.Host {
     // ---- binder ----
 
     /**
-     * The server binder: pulled from its sticky when this is an app with a Context, which names
-     * no manager. An app_process client (no Context, no app process in AMS) can't read one and
-     * asks the manager it was started from instead.
+     * Leaves the server's socket name (new on every server start, told to allowed apps only)
+     * where this uid's native client looks: the host's own $TMPDIR, private to it, which the
+     * client and the bootstrap it spawns share (Termux sets one). Without one, or while this app
+     * isn't allowed, nothing is left and the client keeps coming through the broker.
      */
-    private fun requestBinder(): IBinder? {
-        stickyContext?.let { context ->
-            val binder = readStickyBinder(context)
-            if (binder != null) unavailable = null
-            return binder
+    private fun cacheSocketName(service: IAxeronService) {
+        val dir = System.getenv("TMPDIR")?.takeIf { it.isNotEmpty() } ?: return
+        try {
+            val name = service.axshSocketName ?: return
+            val tmp = File(dir, "$SERVER_NAME_FILE.tmp")
+            tmp.writeText(name)
+            Os.chmod(tmp.path, "600".toInt(8))
+            if (!tmp.renameTo(File(dir, SERVER_NAME_FILE))) tmp.delete()
+        } catch (e: Exception) {
+            // Not allowed yet, or a server from before the name was hidden.
+            Log.i(tag, "no server socket name to leave: ${e.message ?: e}")
         }
-        return requestBinderFromManager()
     }
 
     /**
-     * Reads the server's binder from its sticky broadcast (AxeronService.publishBinder):
-     * registerReceiver with a null receiver just returns the sticky intent system_server holds,
-     * so nothing is delivered, nobody is woken and there is nothing to wait for. Needs a real app
-     * process, so only [start]'s Context path; a stale sticky holds a dead binder, dropped here.
+     * The server binder. In an app, the capability the server pushed: a cold process's first call
+     * can beat that push, so it waits a moment, and the host's own binder (the manager's) may land
+     * meanwhile. An app_process client, which has no provider, asks the manager it was started
+     * from instead.
      */
-    private fun readStickyBinder(context: Context): IBinder? {
-        val sticky = try {
-            context.registerReceiver(null, IntentFilter(ACTION_SERVER_BINDER))
-        } catch (e: Exception) {
-            unavailable = "can't read the server's sticky binder: ${e.message ?: e}"
-            Log.w(tag, "sticky read failed", e)
-            return null
+    private fun requestBinder(): IBinder? {
+        capability?.takeIf { it.pingBinder() }?.let {
+            unavailable = null
+            return it
         }
-        val binder = sticky?.getBundleExtra("data")?.getBinder("binder")
-        if (binder == null) {
-            unavailable = "the server left no binder (not running, or too old to publish one)"
-            return null
-        }
-        if (!binder.pingBinder()) {
-            unavailable = "the server's binder is dead (server stopped)"
-            return null
-        }
-        Log.i(tag, "binder from the server's sticky")
+        if (!inApp) return requestBinderFromManager()
+
+        firstPush.await(PUSH_WAIT_MS, TimeUnit.MILLISECONDS)
+        val binder = capability?.takeIf { it.pingBinder() }
+            ?: binderSource?.invoke()?.takeIf { it.pingBinder() }
+        unavailable = if (binder != null) null
+        else "no access to the server: this app isn't allowed in AxManager, or the server isn't running"
         return binder
     }
 
@@ -391,7 +440,7 @@ object AxBroker : Sessions.Host {
         }
 
         val intent = Intent(ACTION_REQUEST_BINDER)
-            .setPackage(manager)
+            .setComponent(ComponentName(manager, AxeronApiConstant.server.RELAY_RECEIVER))
             .addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
             // We're usually a background app: the background queue can hold this for seconds.
             .addFlags(Intent.FLAG_RECEIVER_FOREGROUND)

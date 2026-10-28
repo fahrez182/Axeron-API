@@ -38,9 +38,11 @@
 
 namespace axsh {
 
-// Name in the abstract (Linux) namespace, so no filesystem path or selinux label is involved
-// in discovery. The server owns the listener.
-inline constexpr char SOCKET_NAME[] = "axeron";
+// The server's own socket is in the abstract (Linux) namespace, under a name new on every server
+// start that only allowed apps are told. The broker or bootstrap of this uid leaves it in this
+// file in $TMPDIR (the host's own); without it the client goes through them instead.
+// Must match AxBroker.SERVER_NAME_FILE.
+inline constexpr char SERVER_NAME_FILE[] = ".axsh-server";
 
 // AxBroker socket: BROKER_PREFIX + decimal uid, also abstract. Must match AxBroker.socketName().
 inline constexpr char BROKER_PREFIX[] = "axsh.";

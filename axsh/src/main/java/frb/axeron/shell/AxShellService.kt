@@ -3,8 +3,6 @@ package frb.axeron.shell
 import android.app.ActivityThread
 import android.content.AttributionSource
 import android.content.ComponentName
-import android.content.ContentProvider
-import android.content.ContentValues
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.IContentProvider
@@ -12,11 +10,9 @@ import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.ApplicationInfo
 import android.ddm.DdmHandleAppName
-import android.database.Cursor
 import android.net.LocalServerSocket
 import android.net.LocalSocket
 import android.net.LocalSocketAddress
-import android.net.Uri
 import android.os.Binder
 import android.os.Build
 import android.os.Bundle
@@ -29,6 +25,7 @@ import android.system.ErrnoException
 import android.system.Os
 import android.system.OsConstants
 import android.util.Log
+import frb.axeron.shared.AxeronApiConstant
 import rikka.hidden.compat.ActivityManagerApis
 import java.io.File
 import java.io.IOException
@@ -63,7 +60,7 @@ import kotlin.system.exitProcess
  *
  * Where RootService fails in ADB mode, this differs: it starts on any shell (libsu only from a
  * root one), its classpath is base.apk (not a jar in the app's private cache, which shell can't
- * read), and it hands its binder in through [ShellServiceProvider], which checks the caller's uid
+ * read), and it hands its binder in through [AxshProvider], which checks the caller's uid
  * (not a broadcast needing BROADCAST_PACKAGE_REMOVED).
  */
 abstract class AxShellService : ContextWrapper(null) {
@@ -157,7 +154,8 @@ abstract class AxShellService : ContextWrapper(null) {
 internal object ShellServiceClient {
     private const val TAG = "AxShellService"
 
-    const val AUTHORITY_SUFFIX = ".shellservice"
+    // AxshProvider's, which takes the attach.
+    const val AUTHORITY_SUFFIX = AxeronApiConstant.server.PROVIDER_AUTHORITY_SUFFIX
     const val METHOD_ATTACH = "attach"
     const val EXTRA_TOKEN = "token"
     const val EXTRA_BINDER = "binder"
@@ -218,12 +216,12 @@ internal object ShellServiceClient {
      */
     private fun defaultLaunch(argv: Array<String>): java.lang.Process = Axsh.exec(argv)
 
-    /** This app, kept by [ShellServiceProvider.onCreate]: providers start before the Application. */
+    /** This app, kept by [AxshProvider.onCreate]: providers start before the Application. */
     @Volatile
     private var appContext: Context? = null
 
     val context: Context
-        get() = checkNotNull(appContext) { "ShellServiceProvider isn't running: is the axsh manifest merged?" }
+        get() = checkNotNull(appContext) { "AxshProvider isn't running: is the axsh manifest merged?" }
 
     fun init(context: Context) {
         appContext = context.applicationContext ?: context
@@ -439,7 +437,7 @@ internal object ShellServiceClient {
         }
     }
 
-    /** From [ShellServiceProvider], on a binder thread: the process with [token] is up. */
+    /** From [AxshProvider], on a binder thread: the process with [token] is up. */
     fun attach(token: String, control: IBinder): IBinder? {
         val proc = starting.remove(token) ?: return null
         proc.control = control
@@ -530,38 +528,6 @@ internal object ShellServiceClient {
 
     private fun checkMainThread() =
         check(Looper.myLooper() == Looper.getMainLooper()) { "AxShellService.bind/unbind/stop: main thread only" }
-}
-
-/**
- * Where a service process hands in its control binder. Exported, so it takes calls only from the
- * server's uids (root, shell) and only with a token one of our binds is waiting on.
- */
-@InternalAxeronApi
-class ShellServiceProvider : ContentProvider() {
-
-    override fun call(method: String, arg: String?, extras: Bundle?): Bundle? {
-        if (method != ShellServiceClient.METHOD_ATTACH || extras == null) return null
-        val uid = Binder.getCallingUid()
-        if (uid != 0 && uid != 2000) { // root, shell
-            Log.w("AxShellService", "attach from uid $uid refused")
-            return null
-        }
-        val token = extras.getString(ShellServiceClient.EXTRA_TOKEN) ?: return null
-        val control = extras.getBinder(ShellServiceClient.EXTRA_BINDER) ?: return null
-        val appToken = ShellServiceClient.attach(token, control) ?: return null
-        return Bundle().apply { putBinder(ShellServiceClient.EXTRA_BINDER, appToken) }
-    }
-
-    override fun onCreate(): Boolean {
-        ShellServiceClient.init(context!!)
-        return true
-    }
-
-    override fun query(uri: Uri, p: Array<String>?, s: String?, a: Array<String>?, o: String?): Cursor? = null
-    override fun getType(uri: Uri): String? = null
-    override fun insert(uri: Uri, values: ContentValues?): Uri? = null
-    override fun delete(uri: Uri, s: String?, a: Array<String>?) = 0
-    override fun update(uri: Uri, v: ContentValues?, s: String?, a: Array<String>?) = 0
 }
 
 // ---- in the service's process ----

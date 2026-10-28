@@ -1,15 +1,8 @@
 package dev.frb.demo_axsh
 
 import android.content.Intent
-import android.content.IntentFilter
-import android.os.Binder
-import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.os.Parcel
-import android.os.Process
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 import com.topjohnwu.superuser.ipc.RootService
 import frb.axeron.shell.AxShellService
 import java.util.concurrent.Callable
@@ -54,9 +47,8 @@ private const val SHELL_SERVICE_DAEMON = "AxShellService daemon"
 
 /** One line under each section's title. */
 val sectionInfo: Map<String, String> = mapOf(
-    COLD_START to "Getting the server binder, the first thing an app does. The sticky is the new " +
-            "path, the manager relay the old one. Force-stop AxManager before running the relay " +
-            "to see what waking it costs.",
+    COLD_START to "Getting to the server, the first thing an app does: nothing is published to " +
+            "pick up; an allowed app is pushed its capability, and the manager is found by the API.",
     CONNECTION to "How this app reaches AxManager's server through axsh.",
     SHELL to "Exit code, streams, stdin and env of an axsh shell.",
     PRIVILEGES to "What the shell can do and the app can't. uid 2000: ADB mode, 0: root.",
@@ -479,8 +471,9 @@ private val daemonTests: List<AxshTest> = listOf(
 private val coldStartTests: List<AxshTest> = listOf(
     AxshTest(
         COLD_START, "First Axsh.exec vs next",
-        "Axsh.exec(true) three times: the first one pulls the sticky and verifies the server " +
-                "(attach + callback); the next ones reuse it. Needs AxBroker.start. Runs first."
+        "Axsh.exec(true) three times: the first one takes the capability the server pushed (waiting " +
+                "for it if this process is new) and verifies it (attach + callback); the next ones " +
+                "reuse it. Needs AxBroker.start and this app allowed. Runs first."
     ) {
         if (!App.directConnection) return@AxshTest info("not run: needs the direct connection (AxBroker.start)")
         val millis = mutableListOf<Double>()
@@ -518,55 +511,23 @@ private val coldStartTests: List<AxshTest> = listOf(
         )
     },
     AxshTest(
-        COLD_START, "Sticky (new path)",
-        "registerReceiver(null, SERVER_BINDER): the first call, then 5 more. Needs the server running."
+        COLD_START, "Find the manager",
+        "AxBroker.findManager, the first call, then 5 more: the system resolves AxManager's " +
+                "request-access door, no package name. Null when it isn't installed or is in stealth."
     ) {
-        val filter = IntentFilter("AxRuntime.SERVER_BINDER")
         val millis = mutableListOf<Double>()
-        var binder: android.os.IBinder? = null
+        var manager: android.content.pm.ApplicationInfo? = null
         repeat(6) {
             val start = System.nanoTime()
-            val sticky = App.app.registerReceiver(null, filter)
+            manager = frb.axeron.shell.AxBroker.findManager(App.app)
             millis += (System.nanoTime() - start) / 1_000_000.0
-            binder = sticky?.getBundleExtra("data")?.getBinder("binder")
         }
-        val ping = binder?.pingBinder()
         info(
-            "first %.2fms, next %s, ping=%s".format(
-                millis[0], millis.drop(1).joinToString(" ") { "%.2f".format(it) }, ping
+            "package=%s, first %.2fms, next %s".format(
+                manager?.packageName, millis[0], millis.drop(1).joinToString(" ") { "%.2f".format(it) }
             ),
-            "binder: $binder\nms each: $millis"
+            "package: ${manager?.packageName}\nlibDir: ${manager?.nativeLibraryDir}\nms each: $millis"
         )
-    },
-    AxshTest(
-        COLD_START, "Manager relay (old path)",
-        "Broadcast REQUEST_BINDER to AxManager and wait for its reply (5s). With AxManager " +
-                "force-stopped this includes waking it."
-    ) {
-        val latch = CountDownLatch(1)
-        val start = System.nanoTime()
-        var replyMillis = -1.0
-        val receiver = object : Binder() {
-            override fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
-                if (code != 1) return super.onTransact(code, data, reply, flags)
-                if (latch.count > 0) {
-                    replyMillis = (System.nanoTime() - start) / 1_000_000.0
-                    latch.countDown()
-                }
-                return true
-            }
-        }
-        val intent = Intent("AxRuntime.REQUEST_BINDER")
-            .setPackage(App.MANAGER_PACKAGE)
-            .addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES or Intent.FLAG_RECEIVER_FOREGROUND)
-            .putExtra("data", Bundle().apply {
-                putBinder("binder", receiver)
-                putInt("uid", Process.myUid())
-            })
-        App.app.sendBroadcast(intent)
-        val answered = latch.await(5, TimeUnit.SECONDS)
-        if (answered) info("reply after %.1fms".format(replyMillis), "reply after $replyMillis ms")
-        else fail("no reply in 5000ms", "AxManager didn't answer: not running, or blocked from starting")
     },
 )
 

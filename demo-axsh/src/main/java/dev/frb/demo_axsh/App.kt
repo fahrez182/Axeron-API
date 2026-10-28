@@ -3,7 +3,6 @@ package dev.frb.demo_axsh
 import android.app.Application
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.util.Log
 import com.topjohnwu.superuser.Shell
 import frb.axeron.shell.AxBroker
@@ -47,17 +46,19 @@ class App : Application() {
 
     private fun ownAxsh() = File(applicationInfo.nativeLibraryDir, "libaxsh.so")
 
-    // Its path changes on every manager update, so it is resolved on each start rather than stored.
-    private fun managerAxsh(): File? = try {
-        File(packageManager.getApplicationInfo(MANAGER_PACKAGE, 0).nativeLibraryDir, "libaxsh.so")
-    } catch (_: PackageManager.NameNotFoundException) {
-        Log.e(TAG, "$MANAGER_PACKAGE is not installed")
-        null
+    // Found by the API, not by a package name. Its path changes on every manager update, so it is
+    // resolved on each start rather than stored.
+    private fun managerAxsh(): File? {
+        val manager = AxBroker.findManager(this)
+        if (manager == null) {
+            Log.e(TAG, "no AxManager found (not installed, or in stealth mode)")
+            return null
+        }
+        return File(manager.nativeLibraryDir, "libaxsh.so")
     }
 
     companion object {
         private const val TAG = "Axsh"
-        const val MANAGER_PACKAGE = "frb.axeron.manager"
 
         private const val KEY_DIRECT_CONNECTION = "axsh_direct_connection"
         const val DEFAULT_DIRECT_CONNECTION = true

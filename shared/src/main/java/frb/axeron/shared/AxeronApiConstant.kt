@@ -26,6 +26,28 @@ object AxeronApiConstant {
         const val BIND_APPLICATION_CLIENT_UID = "axeron:bind-application-client-uid"
 
         /**
+         * axsh's provider in every app using it (AxshProvider): `<package>` + this suffix, for the
+         * server's uids alone. The server pushes an allowed app its capability there, and a shell
+         * service process hands in its control binder.
+         */
+        const val PROVIDER_AUTHORITY_SUFFIX = ".axeron"
+        const val METHOD_SEND_CAPABILITY = "sendCapability"
+        const val EXTRA_CAPABILITY = "axeron:capability"
+
+        /**
+         * An app asks AxManager to allow it: an implicit activity, started for a result (the
+         * manager answers whoever the system says started it). The one thing that tells an app
+         * AxManager is here before it is allowed.
+         */
+        const val ACTION_REQUEST_ACCESS = "AxRuntime.REQUEST_ACCESS"
+
+        /**
+         * The manager's relay for app_process clients, addressed by component (it has no intent
+         * filter, so no app finds the manager by it): `<manager package>` + this class.
+         */
+        const val RELAY_RECEIVER = "frb.axeron.manager.receiver.BinderRequestReceiver"
+
+        /**
          * Path lists of the default env (TYPE_DEFAULT_ENV) that the user's env may only add to:
          * its value keeps `$NAME` for the default, which is put in front when it is missing.
          * Every other default variable is the server's or the system's, and the user's env
@@ -65,6 +87,13 @@ object AxeronApiConstant {
          * the server dies. Off (absent) by default, so plugins keep running without the server.
          */
         const val STOP_PLUGINS_WITH_SERVER = "ax_stop_plugins_with_server"
+
+        /**
+         * Flag file in [PARENT]: stealth. While present, an app that isn't allowed gets no
+         * permission dialog from anywhere (only a no), the manager's request-access activity is
+         * disabled, and its relay answers allowed uids only.
+         */
+        const val STEALTH = "ax_stealth"
     }
 
 

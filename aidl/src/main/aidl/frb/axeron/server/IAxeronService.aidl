@@ -57,5 +57,11 @@ interface IAxeronService {
     // only clients of the caller's uid are taken. Closed when the server stops.
     ParcelFileDescriptor openAxshChannel() = 113;
     // 114 was closeAxshChannels: a change of the axsh keep-alive flags (updateFlagsForUid) does it.
+    // The manager's: uid's own view of the server (refusing every call not from uid; until uid is
+    // allowed, only asking for that), for the manager's relay to hand on.
+    IBinder getClientCapability(int uid) = 115;
+    // The abstract socket the server's own axsh sessions listen on (root mode), new on every
+    // start; for allowed callers only. Null when the server has none.
+    String getAxshSocketName() = 116;
     void exit() = 16777114;
 }

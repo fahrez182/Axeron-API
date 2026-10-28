@@ -337,7 +337,8 @@ int main(int argc, char** argv) {
     // An interactive terminal gets a PTY on the server; anything else gets plain pipes.
     const bool pty = ::isatty(STDIN_FILENO) && ::isatty(STDOUT_FILENO);
 
-    // Server socket first (works whenever SELinux allows it, e.g. root mode); otherwise the
+    // Server socket first, under the name left for us (works whenever SELinux allows it, e.g.
+    // root mode); otherwise the
     // app's own broker, which reaches the server over binder; otherwise a one-shot broker in
     // app_process from our own APK, so apps that only exec this binary (Termux) work too.
     int fd = connect_server();

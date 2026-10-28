@@ -1,13 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- AxBroker.findManager: the manager is found by its request-access door
+         (AxeronApiConstant.server.ACTION_REQUEST_ACCESS), never by a package name. -->
+    <queries>
+        <intent>
+            <action android:name="AxRuntime.REQUEST_ACCESS" />
+        </intent>
+    </queries>
+
     <application>
-        <!-- AxShellService: its processes hand their binder in here (it checks their uid), and it
-             keeps the app's Context for AxShellService.bind. -->
+        <!-- AxshProvider: the server pushes this app its capability here once AxManager allows
+             it, and shell service processes hand in their binder; it keeps the app's Context for
+             AxShellService.bind. Only the server's uids (root, shell) hold the permission. Not
+             direct boot aware: that would start every host app before the first unlock.
+             Authority: AxeronApiConstant.server.PROVIDER_AUTHORITY_SUFFIX. -->
         <provider
-            android:name="frb.axeron.shell.ShellServiceProvider"
-            android:authorities="${applicationId}.shellservice"
-            android:exported="true" />
+            android:name="frb.axeron.shell.AxshProvider"
+            android:authorities="${applicationId}.axeron"
+            android:exported="true"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
     </application>
 
 </manifest>

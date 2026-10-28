@@ -4,6 +4,7 @@
 #include <cerrno>
 #include <climits>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <fcntl.h>
@@ -51,8 +52,33 @@ void broker_name(char* out, size_t size) {
 
 }  // namespace
 
+// The server's socket name as the broker or bootstrap left it, or false (errno ENOENT) if none.
+static bool read_server_name(char* out, size_t size) {
+    const char* dir = ::getenv("TMPDIR");
+    char path[PATH_MAX];
+    if (dir == nullptr || *dir == '\0' ||
+        std::snprintf(path, sizeof(path), "%s/%s", dir, SERVER_NAME_FILE) >= static_cast<int>(sizeof(path))) {
+        errno = ENOENT;
+        return false;
+    }
+    const int fd = ::open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return false;
+    const ssize_t n = ::read(fd, out, size - 1);
+    ::close(fd);
+    if (n <= 0) {
+        errno = ENOENT;
+        return false;
+    }
+    out[n] = '\0';
+    return true;
+}
+
 int connect_server() {
-    const int fd = connect_abstract(SOCKET_NAME);
+    char name[64];
+    if (!read_server_name(name, sizeof(name))) return -1;
+    // A stale name (the server started again since) finds no listener: the caller falls back
+    // to the broker, which leaves the new one.
+    const int fd = connect_abstract(name);
     if (fd < 0) return -1;
 
     // First come, first served here too: an app could take the name before the server does and

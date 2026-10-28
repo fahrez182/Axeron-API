@@ -588,6 +588,11 @@ object Axeron {
     @RestrictTo(LIBRARY_GROUP_PREFIX)
     fun getFlagsForUid(uid: Int, mask: Int): Int = remote("getFlagsForUid", 0) { getFlagsForUid(uid, mask) }
 
+    /** [uid]'s own view of the server, for the manager to hand on; null while [uid] isn't allowed. */
+    @JvmStatic
+    @RestrictTo(LIBRARY_GROUP_PREFIX)
+    fun getClientCapability(uid: Int): IBinder? = remote("getClientCapability", null) { getClientCapability(uid) }
+
     @JvmStatic
     @RestrictTo(LIBRARY_GROUP_PREFIX)
     fun updateFlagsForUid(uid: Int, mask: Int, value: Int) {
