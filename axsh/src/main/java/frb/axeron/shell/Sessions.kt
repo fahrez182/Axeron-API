@@ -43,6 +43,13 @@ class Sessions(private val host: Host) {
          */
         fun refuse(uid: Int, pid: Int): String?
 
+        /**
+         * True: nothing is said to this peer at all. Its connection is closed before a word is
+         * read or written, as if nobody were listening, and the client goes on as it does
+         * when there is no one there.
+         */
+        fun ignore(uid: Int, pid: Int): Boolean = false
+
         /** The server to start shells on; null when it is out of reach. */
         fun service(): IAxeronService?
 
@@ -80,6 +87,9 @@ class Sessions(private val host: Host) {
         private const val MAX_STRING = 1 shl 20
 
         const val DENIED_MESSAGE = "AxManager permission required: allow this app in AxManager"
+
+        /** No server to reach. */
+        const val NOT_RUNNING_MESSAGE = "AxManager server is not running"
 
         /** How long a session waits on the permission dialog before giving up. */
         const val PERMISSION_WAIT_MS = 15_000L
@@ -210,6 +220,11 @@ class Sessions(private val host: Host) {
         val uid = credentials?.uid ?: -1
         val pid = credentials?.pid ?: -1
 
+        if (host.ignore(uid, pid)) {
+            Log.i(tag, "uid=$uid pid=$pid ignored")
+            return
+        }
+
         val request = readRequest(input)
         // The client's pipes arrive with the handshake's first byte.
         val received = socket.ancillaryFileDescriptors.orEmpty()
@@ -235,8 +250,8 @@ class Sessions(private val host: Host) {
                 val why = host.unavailableReason()
                 writeStatus(
                     output, STATUS_ERROR,
-                    if (why == null) "AxManager server is not running"
-                    else "AxManager server is not running [$why]"
+                    if (why == null) NOT_RUNNING_MESSAGE
+                    else "$NOT_RUNNING_MESSAGE [$why]"
                 )
                 return
             }

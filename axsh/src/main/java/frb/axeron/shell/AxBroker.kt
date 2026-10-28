@@ -463,7 +463,9 @@ object AxBroker : Sessions.Host {
         }
 
         if (!latch.await(BINDER_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
-            unavailable = "the manager didn't answer (is AxManager running?)"
+            // Not running, couldn't be woken, or (stealth) not answering this app: worded as when
+            // there is nobody to ask, since that is what the app is to make of it.
+            unavailable = "no way to reach the server (no answer)"
             Log.w(tag, "no binder from $manager")
             return null
         }

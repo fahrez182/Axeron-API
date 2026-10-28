@@ -229,6 +229,7 @@ void on_winch(int) {
 }
 
 void watch_window() {
+    if (winch_pipe[0] >= 0) return;  // a session tried before this one set it up
     if (::pipe2(winch_pipe, O_CLOEXEC | O_NONBLOCK) != 0) return;
     struct sigaction sa{};
     sa.sa_handler = on_winch;
@@ -285,6 +286,10 @@ void close_pipes(int (*pipes)[2], int n) {
     }
 }
 
+// run_session's result when the other end hung up before any reply: nobody took the session.
+// Nothing of ours was read yet, so main tries the next way in, as when it couldn't connect.
+constexpr int HUNG_UP = -1;
+
 int run_session(int fd, char** args, int count, bool pty) {
     // [0] stdin: the server reads [0], we write [1]. [1] stdout, [2] stderr: the server writes
     // [1], we read [0]. A PTY merges stderr into stdout.
@@ -308,9 +313,8 @@ int run_session(int fd, char** args, int count, bool pty) {
 
     uint8_t status;
     if (!sent || !read_all(fd, &status, 1)) {
-        std::fprintf(stderr, "axsh: no reply from AxManager\n");
         close_pipes(pipes, n);
-        return 126;
+        return HUNG_UP;
     }
     if (status != STATUS_OK) {
         report_failure(fd, status);
@@ -338,20 +342,28 @@ int main(int argc, char** argv) {
     const bool pty = ::isatty(STDIN_FILENO) && ::isatty(STDOUT_FILENO);
 
     // Server socket first, under the name left for us (works whenever SELinux allows it, e.g.
-    // root mode); otherwise the
-    // app's own broker, which reaches the server over binder; otherwise a one-shot broker in
-    // app_process from our own APK, so apps that only exec this binary (Termux) work too.
-    int fd = connect_server();
-    const int server_err = fd < 0 ? errno : 0;
-    if (fd < 0) fd = connect_broker();
-    if (fd < 0) fd = spawn_bootstrap();
-    if (fd < 0) {
-        std::fprintf(stderr, "axsh: AxManager server is not reachable (%s), and there is no broker to fall back on (%s)\n",
-                     std::strerror(server_err), std::strerror(errno));
-        return 127;
+    // root mode); otherwise the app's own broker, which reaches the server over binder;
+    // otherwise a one-shot broker in app_process from our own APK, so apps that only exec this
+    // binary (Termux) work too. One that hangs up without a word counts as not there.
+    int (*const ways[])() = {connect_server, connect_broker, spawn_bootstrap};
+    int server_err = 0;
+    bool answered_nothing = false;
+    for (int i = 0; i < 3; ++i) {
+        const int fd = ways[i]();
+        if (fd < 0) {
+            if (i == 0) server_err = errno;
+            continue;
+        }
+        const int code = run_session(fd, argv + 1, argc - 1, pty);
+        ::close(fd);
+        if (code != HUNG_UP) return code;
+        answered_nothing = true;
     }
-
-    const int code = run_session(fd, argv + 1, argc - 1, pty);
-    ::close(fd);
-    return code;
+    if (answered_nothing) {
+        std::fprintf(stderr, "axsh: no reply from AxManager\n");
+        return 126;
+    }
+    std::fprintf(stderr, "axsh: AxManager server is not reachable (%s), and there is no broker to fall back on (%s)\n",
+                 std::strerror(server_err), std::strerror(errno));
+    return 127;
 }
