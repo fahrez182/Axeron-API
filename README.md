@@ -15,12 +15,17 @@ Guides: [axmanager.app](https://axmanager.app), in particular
 | `api` | The client API: `Axeron` (binder, permission, listeners), `relaunchServer`, file service, plugins, server info |
 | `aidl` | The server's binder interfaces (`IAxeronService`, `IAxshProcess`, file service, Shizuku's) |
 | `shared` | Constants shared by the server and its clients (`AxeronApiConstant`, `ShizukuApiConstant`) |
-| `provider` | `AxeronProvider`, through which the server hands an app its binder |
+| `provider` | `AxeronProvider`, through which the server hands AxManager its binder |
 | `server-shared` | Server-side code shared with the manager |
-| `axsh` | The `axsh` shell: native client `libaxsh.so`, its in-app broker, the `app_process` bootstrap, and `AxShellService` |
+| `axsh` | The `axsh` shell: native client `libaxsh.so`, its in-app broker, `AxshProvider` (where the server pushes an allowed app its capability), the `app_process` bootstrap, and `AxShellService` |
 | `demo-axsh` | Test bench app for `axsh` (see below) |
 
 ## Using it
+
+> **3.0 changed how apps connect.** The server no longer publishes its binder: once AxManager
+> allows an app, the server pushes that app its own capability, which works for its uid alone.
+> Clients before 3.0 find no server on AxManager 3.0, and 3.0 clients need AxManager 3.0. See
+> [Security in 3.0](https://axmanager.app/guide/security).
 
 ### From JitPack
 
@@ -42,11 +47,11 @@ Then the modules you need, at a release tag (or a commit hash, or `main-SNAPSHOT
 ```kotlin
 // build.gradle.kts
 dependencies {
-    implementation("com.github.fahrez182.Axeron-API:axsh:2.1.1")
+    implementation("com.github.fahrez182.Axeron-API:axsh:3.0.0")
     // axsh brings aidl along at runtime, and its own API (AxBroker, Axsh, AxShellService) uses
     // none of its types. Add it, at the same version, only to call the server's binder
     // interfaces directly (IAxeronService, …).
-    // implementation("com.github.fahrez182.Axeron-API:aidl:2.1.1")
+    // implementation("com.github.fahrez182.Axeron-API:aidl:3.0.0")
 }
 ```
 
@@ -72,16 +77,33 @@ depend on them from there:
 // settings.gradle.kts: mavenLocal() in dependencyResolutionManagement.repositories
 
 // build.gradle.kts
-// group dev.frb.axeron, version = api_version_code from manifest.gradle.kts (21100 for 2.1.1)
+// group dev.frb.axeron, version = api_version_code from manifest.gradle.kts (30000 for 3.0.0)
 dependencies {
-    implementation("dev.frb.axeron:axsh:21100")
+    implementation("dev.frb.axeron:axsh:30000")
     // As from JitPack: only to call the server's binder interfaces directly.
-    // implementation("dev.frb.axeron:aidl:21100")
+    // implementation("dev.frb.axeron:aidl:30000")
 }
 ```
 
-Every app needs AxManager's permission (Allowed, Ask or Denied in AxManager's Privilege page).
-With **Ask**, the first call shows AxManager's dialog.
+### Getting access
+
+Every app needs AxManager's permission (Allowed, Ask or Denied in AxManager's Privilege page),
+bound to the app's signing certificate: a build signed with another key is asked again.
+
+With the `axsh` module, an app that isn't allowed yet is handed nothing, so it asks first:
+
+```kotlin
+if (!AxBroker.requestAccess(activity, REQUEST_AXMANAGER)) {
+    // AxManager isn't installed, or is in AX-Stealth Mode
+}
+// onActivityResult: RESULT_OK once allowed (at once, no dialog, if it already was);
+// the server then pushes the capability by itself
+```
+
+`AxBroker.findManager(context)` returns AxManager's `ApplicationInfo`, found by the request-access
+door rather than a package name (`axsh`'s manifest declares the query), or `null` when it isn't
+installed or is in stealth. Without the module, the first `libaxsh.so` command asks instead, like
+a terminal.
 
 ## axsh in an app
 
@@ -89,20 +111,26 @@ An app runs shell commands through axsh in one of two ways.
 
 ### Without a dependency: AxManager's `libaxsh.so`
 
+AxManager has no fixed package name: find it by the door it opens to apps.
+
 ```xml
 <queries>
-    <package android:name="frb.axeron.manager" />
+    <intent>
+        <action android:name="AxRuntime.REQUEST_ACCESS" />
+    </intent>
 </queries>
 ```
 
 ```kotlin
-val dir = packageManager.getApplicationInfo("frb.axeron.manager", 0).nativeLibraryDir
-val axsh = File(dir, "libaxsh.so")   // changes on every AxManager update: resolve it each start
+val manager = packageManager.resolveActivity(Intent("AxRuntime.REQUEST_ACCESS"), 0)
+    ?.activityInfo?.applicationInfo    // null: not installed, or in AX-Stealth Mode
+val axsh = File(manager!!.nativeLibraryDir, "libaxsh.so")   // changes on every update: resolve it each start
 val process = Runtime.getRuntime().exec(arrayOf(axsh.path, "-c", "id"))
 ```
 
 Nothing to bundle, and it always matches the installed AxManager. In ADB mode each run starts a
-short-lived helper in `app_process` that asks AxManager for the server's binder, as in Termux.
+short-lived helper in `app_process` that asks AxManager's relay for this app's own capability
+(showing its dialog with **Ask**), as in Termux.
 After that first command the helper leaves `libaxsh.so --axsh-daemon` behind (a few MB, no JVM),
 which hands later commands straight to the server; AxManager's **Keep axsh ready** (per app, in
 its Privilege details) sets how long it stays: smart (default, 5 idle minutes), no limit or off.
@@ -125,8 +153,9 @@ class App : Application() {
 }
 ```
 
-The broker fetches the binder once and keeps it. An app that already holds the binder passes it:
-`AxBroker.start(this) { Axeron.getBinder() }`. Then run commands one of two ways:
+The broker takes the capability the server pushes to `AxshProvider` once the app is allowed,
+checks that it calls back from root or shell, and keeps it; a command right after the app starts
+waits up to 3 seconds for it. Then run commands one of two ways:
 
 **`Axsh`, in this process.** A shell on the server as a `java.lang.Process`, from one binder call:
 nothing is exec'd, so there is nothing to extract. Call it off the main thread.
@@ -183,7 +212,8 @@ checked `IOException`:
 
 ```java
 AxBroker.start(this);                                   // in Application.onCreate()
-AxBroker.start(this, () -> binder);                     // a host that holds the binder
+AxBroker.requestAccess(activity, REQUEST_AXMANAGER);    // false: no AxManager to ask
+ApplicationInfo manager = AxBroker.findManager(context); // null: none, or in stealth
 
 Process process = Axsh.newProcess("-c", "pm list packages");
 Process run = Axsh.exec(new String[]{"ls", "-l"}, null, "/");
@@ -278,9 +308,11 @@ bind, even after the app restarts, reaches the same instance and calls `onRebind
   `<package>:shell_shared` or `<package>:shell_daemon`.
 - `AxShellService.lastFailure(component)` says why a bind gave `onBindingDied` or `onNullBinding`.
 
-**Starting the process yourself**: libsu's `bindOrTask` hands back the start command for a shell
-of your choice. Here, set it once for all binds with `AxShellService.setLauncher { argv -> … }`,
-which gets the `app_process` argv and returns the started `Process`.
+**Starting the process yourself**: set a launcher once for all binds with
+`AxShellService.setLauncher { argv -> … }`, which gets the `app_process` argv and returns the
+started `Process`. Or per bind, as libsu does: `AxShellService.bindOrTask(intent, connection)`
+returns the `Task` to start the process with a launcher of your own, or `null` when the process is
+already there (the bind joins it).
 
 **Not (yet) like libsu**: user 0 only.
 
@@ -301,7 +333,10 @@ A test bench for all of the above. Run it with AxManager's server running.
   - `AxShellService`: uid, `Runtime.exec` inside, two services in one process with a shared
     static, the clipboard from its Context, `getApplicationContext()`;
   - `AxShellService` daemon: same pid across an unbind and across closing the app, a new one after
-    `stop`.
+    `stop`;
+  - security probes: knocking on the pre-3.0 `@axeron` socket, planting a binder through the
+    app's own `AxshProvider`, and what `AxBroker.findManager` finds, each showing what it got;
+  - cold start: how long the first `Axsh.exec` takes, and what each exec costs.
 - **Custom command**, through the selected runner.
 
 Compare *Latency* with the switch on and off, and with each runner, to see what each path costs.
