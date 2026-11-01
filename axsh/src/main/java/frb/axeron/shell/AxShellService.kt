@@ -666,6 +666,8 @@ internal object ShellServiceRemote {
 
         // The name Studio's debugger and Logcat list this process under.
         runCatching { DdmHandleAppName.setAppName("$packageName:shell_${args[1]}", 0) }
+        // Deprecated for apps, whose main looper the framework makes; in app_process nothing does.
+        @Suppress("DEPRECATION")
         Looper.prepareMainLooper()
 
         val app = try {
@@ -827,7 +829,7 @@ internal object ShellServiceRemote {
     }
 
     /** A launch for a later run of the app found us: `bind <token>` or `stop <class>`. */
-    private fun takeOver(client: LocalSocket) = client.use {
+    private fun takeOver(client: LocalSocket): Unit = client.use {
         // Same uid only: the server's, as the launch that found us.
         if (it.peerCredentials.uid != Os.getuid()) return
         val line = it.inputStream.bufferedReader().readLine() ?: return

@@ -1,6 +1,5 @@
 plugins {
     alias(libs.plugins.android.library)
-    alias(libs.plugins.kotlin.android)
 }
 
 android {
@@ -62,7 +61,7 @@ val bootstrapAbis = listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
 val bootstrapLibDir = layout.buildDirectory.dir("generated/bootstrapLib")
 val bootstrapDexDir = layout.buildDirectory.dir("intermediates/bootstrapDex")
 
-android.sourceSets.getByName("main").jniLibs.srcDir(bootstrapLibDir)
+android.sourceSets.getByName("main").jniLibs.srcDir(bootstrapLibDir.get().asFile)
 
 fun classesJars(configuration: String) = configurations.getByName(configuration).incoming
     .artifactView {
@@ -83,7 +82,9 @@ val bootstrapDex = tasks.register<JavaExec>("bootstrapDex") {
     outputs.dir(outDir)
 
     classpath = files(
-        android.sdkDirectory.resolve("build-tools/${android.buildToolsVersion}/lib/d8.jar")
+        androidComponents.sdkComponents.sdkDirectory.map {
+            it.dir("build-tools").dir(android.buildToolsVersion).file("lib/d8.jar")
+        }
     )
     mainClass.set("com.android.tools.r8.R8")
     argumentProviders.add(CommandLineArgumentProvider {

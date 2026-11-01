@@ -1,6 +1,5 @@
 plugins {
     alias(libs.plugins.android.library)
-    alias(libs.plugins.kotlin.android)
 }
 
 android {
@@ -21,6 +20,7 @@ dependencies {
     implementation(project(":api"))
     implementation(project(":aidl"))
     implementation(libs.androidx.annotation)
+    implementation(libs.androidx.core.ktx)
 }
 
 // Not published: only AxManager uses it, as a Gradle project. Apps connect through axsh.

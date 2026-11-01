@@ -7,13 +7,13 @@ import android.content.Intent;
 import android.content.pm.ProviderInfo;
 import android.database.Cursor;
 import android.net.Uri;
-import android.os.Build;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.util.Log;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.core.os.BundleCompat;
 
 import frb.axeron.api.Axeron;
 import frb.axeron.api.core.AxeronSettings;
@@ -70,12 +70,7 @@ public class AxeronProvider extends ContentProvider {
     }
 
     private void handleSendBinder(@NonNull Bundle extras) {
-        BinderContainer container;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            container = extras.getParcelable(EXTRA_BINDER, BinderContainer.class);
-        } else {
-            container = extras.getParcelable(EXTRA_BINDER);
-        }
+        BinderContainer container = BundleCompat.getParcelable(extras, EXTRA_BINDER, BinderContainer.class);
 
         if (!Axeron.pingBinder()) {
             if (container != null && container.binder != null) {

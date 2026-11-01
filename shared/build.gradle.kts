@@ -1,7 +1,9 @@
 plugins {
     alias(libs.plugins.android.library)
-    alias(libs.plugins.kotlin.android)
 }
+
+// Its own copy of the version extras: Gradle 10 no longer looks them up in the root project.
+apply(from = "../manifest.gradle.kts")
 
 android {
     namespace = "frb.axeron.shared"

@@ -1,11 +1,10 @@
 import com.android.build.api.dsl.ApplicationExtension
-import com.android.build.gradle.LibraryExtension
+import com.android.build.api.dsl.LibraryExtension
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.dsl.KotlinAndroidProjectExtension
 
 plugins {
     alias(libs.plugins.android.application) apply false
-    alias(libs.plugins.kotlin.android) apply false
     alias(libs.plugins.android.library) apply false
     alias(libs.plugins.kotlin.compose) apply false
 }
@@ -57,14 +56,21 @@ subprojects {
             }
         }
     }
-    plugins.withId("org.jetbrains.kotlin.android") {
-        extensions.configure<KotlinAndroidProjectExtension> {
+    plugins.withId("com.android.base") {
+        extensions.findByType(KotlinAndroidProjectExtension::class.java)?.apply {
             compilerOptions {
                 jvmTarget.set(JvmTarget.JVM_21)
                 // The libraries use their own AxManager-only API; demo-axsh, an app, must not.
-                if (pluginManager.hasPlugin("com.android.library")) {
-                    optIn.add("frb.axeron.shell.InternalAxeronApi")
-                }
+                // Only where axsh, which declares the marker, is a dependency: elsewhere it's unresolved.
+                optIn.addAll(provider {
+                    val usesAxsh = path == ":axsh" || configurations["implementation"].dependencies
+                        .any { it is ProjectDependency && it.path == ":axsh" }
+                    if (usesAxsh && pluginManager.hasPlugin("com.android.library")) {
+                        listOf("frb.axeron.shell.InternalAxeronApi")
+                    } else {
+                        emptyList()
+                    }
+                })
             }
         }
     }
@@ -137,5 +143,3 @@ subprojects {
     }
 
 }
-
-
